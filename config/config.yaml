@@ -1,0 +1,38 @@
+project:
+  name: langgraph-local-tool-service
+  environment_name: lg_local_tool_service
+  python_version: "3.11"
+
+llm:
+  provider: openai_compatible
+  model_name: Qwen/Qwen3-1.7B
+  base_url: http://127.0.0.1:8001/v1
+  api_key: local-qwen
+  temperature: 0.1
+  max_tokens: 512
+  timeout_seconds: 60
+  service:
+    host: 127.0.0.1
+    port: 8001
+    server_backend: vllm
+    model_source: Qwen/Qwen3-1.7B
+    tensor_parallel_size: 1
+    dtype: auto
+
+mcp:
+  service:
+    host: 127.0.0.1
+    port: 8002
+  manifest_path: config/tools.yaml
+  request_timeout_seconds: 30
+
+gateway:
+  service:
+    host: 127.0.0.1
+    port: 8000
+  debug: true
+  trace_store_limit: 200
+
+logging:
+  level: INFO
+  json: false

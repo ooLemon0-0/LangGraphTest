@@ -1,0 +1,1 @@
+"""Placeholder MCP tool implementations."""
