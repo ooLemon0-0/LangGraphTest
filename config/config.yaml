@@ -16,9 +16,11 @@ llm:
     port: 8001
     server_backend: transformers
     model_source: Qwen/Qwen3-1.7B
+    model_source_cn: Qwen/Qwen3-1.7B
     tensor_parallel_size: 1
     dtype: auto
     model_cache_dir: models
+    download_timeout: 60
     device: auto
     trust_remote_code: false
 

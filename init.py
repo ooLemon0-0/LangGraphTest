@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
 import re
+import shutil
+import socket
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 
@@ -15,7 +19,9 @@ CONFIG_PATH = ROOT_DIR / "config" / "config.yaml"
 DEFAULTS = {
     "llm.service.server_backend": "transformers",
     "llm.service.model_source": "Qwen/Qwen3-1.7B",
+    "llm.service.model_source_cn": "Qwen/Qwen3-1.7B",
     "llm.service.model_cache_dir": "models",
+    "llm.service.download_timeout": "60",
 }
 
 
@@ -121,15 +127,189 @@ def install_packages(force: bool, backend: str) -> None:
         run_command(vllm_command, "Installing optional vLLM backend")
 
 
-def download_model(model_source: str, model_cache_dir: str) -> None:
-    """Download the configured Hugging Face model to the local cache."""
-    cache_dir = (ROOT_DIR / model_cache_dir).resolve()
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    download_script = (
-        "from huggingface_hub import snapshot_download;"
-        f"snapshot_download(repo_id={model_source!r}, cache_dir={str(cache_dir)!r}, resume_download=True)"
-    )
-    run_command([sys.executable, "-c", download_script], f"Downloading model {model_source}")
+def safe_rmtree(path: Path) -> None:
+    """Remove a directory tree if it exists."""
+    if path.exists():
+        shutil.rmtree(path, ignore_errors=False)
+
+
+def is_network_timeout_error(exc: Exception) -> bool:
+    """Return True when an exception looks like a transient network or timeout failure."""
+    if isinstance(exc, (TimeoutError, socket.timeout, ConnectionError)):
+        return True
+
+    message = " ".join(
+        [
+            exc.__class__.__name__,
+            exc.__class__.__module__,
+            str(exc),
+            repr(exc),
+        ]
+    ).lower()
+
+    markers = [
+        "timeout",
+        "timed out",
+        "read timed out",
+        "connect timeout",
+        "connection aborted",
+        "connection reset",
+        "connection refused",
+        "temporary failure in name resolution",
+        "name or service not known",
+        "max retries exceeded",
+        "remote disconnected",
+        "network is unreachable",
+        "proxyerror",
+        "service unavailable",
+        "bad gateway",
+        "gateway timeout",
+        "503",
+        "502",
+        "504",
+        "connectionerror",
+        "readtimeout",
+        "connecttimeout",
+    ]
+    return any(marker in message for marker in markers)
+
+
+def ensure_modelscope_installed(force: bool = False) -> None:
+    """Install ModelScope only when needed, or upgrade it when forced."""
+    if not force and importlib.util.find_spec("modelscope") is not None:
+        return
+
+    command = [sys.executable, "-m", "pip", "install"]
+    if force:
+        command.append("--upgrade")
+    command.append("modelscope")
+    run_command(command, "Installing ModelScope")
+
+
+def finalize_download(staging_dir: Path, target_dir: Path) -> Path:
+    """Replace the target model directory with a fully downloaded staging directory."""
+    target_dir.parent.mkdir(parents=True, exist_ok=True)
+    if target_dir.exists():
+        safe_rmtree(target_dir)
+    shutil.move(str(staging_dir), str(target_dir))
+    return target_dir
+
+
+def model_name_from_source(model_source: str) -> str:
+    """Extract a stable local directory name from a repo id."""
+    normalized = model_source.strip().rstrip("/")
+    return normalized.split("/")[-1]
+
+
+def build_staging_dir(target_dir: Path) -> Path:
+    """Create a unique staging directory near the final model path."""
+    staging_dir = target_dir.parent / f".{target_dir.name}.staging-{uuid.uuid4().hex}"
+    staging_dir.mkdir(parents=True, exist_ok=False)
+    return staging_dir
+
+
+def set_huggingface_timeout_env(timeout_seconds: int) -> dict[str, str | None]:
+    """Apply temporary Hugging Face timeout env vars and return prior values."""
+    previous = {
+        "HF_HUB_DOWNLOAD_TIMEOUT": os.environ.get("HF_HUB_DOWNLOAD_TIMEOUT"),
+        "HF_HUB_ETAG_TIMEOUT": os.environ.get("HF_HUB_ETAG_TIMEOUT"),
+    }
+    timeout_value = str(timeout_seconds)
+    os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = timeout_value
+    os.environ["HF_HUB_ETAG_TIMEOUT"] = timeout_value
+    return previous
+
+
+def restore_env(previous: dict[str, str | None]) -> None:
+    """Restore environment variables modified during download."""
+    for key, value in previous.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
+
+def download_from_modelscope(model_source_cn: str, staging_dir: Path) -> Path:
+    """Download a model from ModelScope into the staging directory."""
+    print(f"[init] Downloading from ModelScope: {model_source_cn}")
+    from modelscope import snapshot_download  # type: ignore
+
+    source_cache_dir = staging_dir.parent / f"{staging_dir.name}-modelscope-cache"
+    source_cache_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        downloaded_path = Path(
+            snapshot_download(
+                model_id=model_source_cn,
+                cache_dir=str(source_cache_dir),
+            )
+        ).resolve()
+        if not downloaded_path.exists():
+            raise RuntimeError(f"ModelScope did not produce a local model directory: {downloaded_path}")
+
+        if any(staging_dir.iterdir()):
+            safe_rmtree(staging_dir)
+            staging_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(downloaded_path, staging_dir, dirs_exist_ok=True)
+        return staging_dir
+    finally:
+        safe_rmtree(source_cache_dir)
+
+
+def download_from_huggingface(model_source: str, staging_dir: Path, timeout_seconds: int) -> Path:
+    """Download a model from Hugging Face into the staging directory."""
+    print(f"[init] Downloading from Hugging Face: {model_source}")
+    from huggingface_hub import snapshot_download
+
+    previous_env = set_huggingface_timeout_env(timeout_seconds)
+    try:
+        snapshot_download(
+            repo_id=model_source,
+            local_dir=str(staging_dir),
+            local_dir_use_symlinks=False,
+            resume_download=True,
+        )
+    finally:
+        restore_env(previous_env)
+    return staging_dir
+
+
+def download_model(
+    model_source: str,
+    model_source_cn: str,
+    model_cache_dir: str,
+    timeout_seconds: int,
+    force: bool,
+) -> Path:
+    """Download the configured model with ModelScope-first fallback behavior."""
+    model_name = model_name_from_source(model_source_cn or model_source)
+    target_dir = (ROOT_DIR / model_cache_dir / model_name).resolve()
+    staging_dir = build_staging_dir(target_dir)
+
+    try:
+        try:
+            ensure_modelscope_installed(force=force)
+            download_from_modelscope(model_source_cn=model_source_cn, staging_dir=staging_dir)
+            result = finalize_download(staging_dir=staging_dir, target_dir=target_dir)
+            print(f"[init] Model download complete via ModelScope: {result}")
+            return result
+        except Exception as exc:
+            safe_rmtree(staging_dir)
+            staging_dir = build_staging_dir(target_dir)
+            if not is_network_timeout_error(exc):
+                raise
+
+            print(f"[init] ModelScope failed, falling back to Hugging Face: {exc}")
+            download_from_huggingface(
+                model_source=model_source,
+                staging_dir=staging_dir,
+                timeout_seconds=timeout_seconds,
+            )
+            result = finalize_download(staging_dir=staging_dir, target_dir=target_dir)
+            print(f"[init] Model download complete via Hugging Face: {result}")
+            return result
+    except Exception:
+        safe_rmtree(staging_dir)
+        raise
 
 
 def main() -> None:
@@ -152,7 +332,10 @@ def main() -> None:
     if not args.skip_model:
         download_model(
             model_source=config["llm.service.model_source"],
+            model_source_cn=config["llm.service.model_source_cn"],
             model_cache_dir=config["llm.service.model_cache_dir"],
+            timeout_seconds=int(config["llm.service.download_timeout"]),
+            force=args.force,
         )
 
     print()
