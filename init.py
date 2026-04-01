@@ -87,11 +87,6 @@ def parse_yaml_scalars(path: Path, defaults: dict[str, str]) -> dict[str, str]:
     return values
 
 
-def current_conda_env() -> str:
-    """Return the active conda environment name if present."""
-    return os.environ.get("CONDA_DEFAULT_ENV", "").strip()
-
-
 def run_command(command: list[str], description: str) -> None:
     """Run one subprocess and stop on failure."""
     print(f"[init] {description}")
@@ -175,72 +170,25 @@ def build_filtered_requirements_file() -> Path:
 
 
 def install_torch_runtime(force: bool) -> None:
-    """Install an appropriate torch runtime without mixing pip and conda variants."""
-    env_name = current_conda_env()
-    if sys.platform.startswith("linux") and command_exists("nvidia-smi") and env_name:
-        install_conda_torch(env_name=env_name, force=force)
-        return
-
+    """Install torch with pip, using the official CUDA wheels on Linux NVIDIA hosts."""
     pip_command = [sys.executable, "-m", "pip", "install"]
     if force:
         pip_command.append("--upgrade")
-    pip_command.extend(["torch", "torchvision", "torchaudio"])
-    run_command(pip_command, "Installing torch runtime with pip")
-
-
-def install_conda_torch(env_name: str, force: bool) -> None:
-    """Install CUDA-enabled torch via conda for Linux NVIDIA hosts."""
-    verify_command = [
-        "conda",
-        "run",
-        "--no-capture-output",
-        "-n",
-        env_name,
-        "python",
-        "-c",
-        "import torch; raise SystemExit(0 if torch.cuda.is_available() else 1)",
-    ]
-    verified = subprocess.run(
-        verify_command,
-        cwd=ROOT_DIR,
-        check=False,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    if verified.returncode == 0 and not force:
-        print(f"[init] CUDA-enabled PyTorch already available in conda env {env_name}.")
+    if sys.platform.startswith("linux") and command_exists("nvidia-smi"):
+        pip_command.extend(
+            [
+                "torch==2.5.1",
+                "torchvision==0.20.1",
+                "torchaudio==2.5.1",
+                "--index-url",
+                "https://download.pytorch.org/whl/cu124",
+            ]
+        )
+        run_command(pip_command, "Installing CUDA-enabled torch runtime with pip")
         return
 
-    remove_command = [
-        "conda",
-        "remove",
-        "-n",
-        env_name,
-        "-y",
-        "pytorch",
-        "torchvision",
-        "torchaudio",
-        "pytorch-cuda",
-    ]
-    print(f"[init] Resetting torch runtime in conda env {env_name}.")
-    subprocess.run(remove_command, cwd=ROOT_DIR, check=False)
-
-    install_command = [
-        "conda",
-        "install",
-        "-n",
-        env_name,
-        "-y",
-        "pytorch",
-        "torchvision",
-        "torchaudio",
-        "pytorch-cuda=12.4",
-        "-c",
-        "pytorch",
-        "-c",
-        "nvidia",
-    ]
-    run_command(install_command, "Installing CUDA-enabled PyTorch with conda")
+    pip_command.extend(["torch", "torchvision", "torchaudio"])
+    run_command(pip_command, "Installing torch runtime with pip")
 
 
 def safe_rmtree(path: Path) -> None:
