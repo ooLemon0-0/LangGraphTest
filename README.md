@@ -1,221 +1,105 @@
 # Local LangGraph Tool-Use Service
 
-This project is a local-first starter scaffold for a production-style tool-use system with three services:
+这个项目现在采用“`conda` 启动器 + Python 服务”的方式运行。
 
-- An OpenAI-compatible LLM service that serves a local Qwen model.
-- An MCP-style internal tool server that exposes explicit tool contracts over FastAPI.
-- A FastAPI gateway that runs a LangGraph workflow and calls the MCP server as its tool layer.
+## 入口方式
 
-## Architecture
+不要直接先手动创建 Python 虚拟环境，推荐使用根目录启动器。
 
-```text
-Client
-  |
-  v
-Gateway / LangGraph (FastAPI, port 8000)
-  |
-  +--> MCP Tool Server (FastAPI, port 8002)
-  |
-  +--> Local LLM Service (OpenAI-compatible, port 8001)
+### Windows
+
+初始化环境与模型：
+
+```bat
+bootstrap.bat
 ```
 
-### Service roles
+启动整个项目：
 
-- LLM service: hosts the local model behind an OpenAI-compatible `/v1/chat/completions` API.
-- MCP server: owns tool manifests, schemas, request validation, and placeholder implementations.
-- Gateway: receives user chat requests, runs the LangGraph flow, plans tool calls, executes them, reviews results, and returns the final answer.
-
-## Directory Structure
-
-```text
-.
-├── README.md
-├── init.py
-├── config
-│   ├── config.yaml
-│   └── tools.yaml
-├── scripts
-│   ├── start_all.sh
-│   ├── start_gateway.sh
-│   ├── start_llm.sh
-│   └── start_mcp.sh
-├── app
-│   ├── common
-│   │   ├── logging.py
-│   │   ├── schemas.py
-│   │   └── settings.py
-│   ├── gateway
-│   │   ├── api.py
-│   │   ├── main.py
-│   │   └── response_models.py
-│   ├── graph
-│   │   ├── build_graph.py
-│   │   ├── nodes.py
-│   │   ├── prompts.py
-│   │   ├── router.py
-│   │   └── state.py
-│   ├── llm_client
-│   │   └── openai_compatible.py
-│   └── mcp_server
-│       ├── docs
-│       │   └── TOOL_SPEC.md
-│       ├── main.py
-│       ├── registry.py
-│       ├── tool_schemas.py
-│       └── tools
-│           ├── agent_tools.py
-│           ├── house_tools.py
-│           └── meta_tools.py
-└── logs
+```bat
+start.bat
 ```
 
-## Startup Order
+### Linux
 
-Start the services in this order:
-
-1. LLM service
-2. MCP server
-3. Gateway
-
-You can start them separately:
+初始化环境与模型：
 
 ```bash
-bash scripts/start_llm.sh
-bash scripts/start_mcp.sh
-bash scripts/start_gateway.sh
+chmod +x bootstrap.sh start.sh
+./bootstrap.sh
 ```
 
-Or together:
+启动整个项目：
 
 ```bash
-bash scripts/start_all.sh
+./start.sh
 ```
 
-## Configuration
+## 启动器职责
 
-All service configuration lives in `config/config.yaml`.
+`bootstrap` 启动器会先读取 [config/config.yaml](/E:/something%20I%20can%20turn%20to/HouGarden/Tool-Use/LangGraphTest/config/config.yaml)，然后：
 
-### Main sections
+- 检查本机是否存在 `conda`
+- 检查配置里的 `project.environment_name`
+- 如果 conda 环境不存在，则自动创建
+- 使用该 conda 环境执行 [init.py](/E:/something%20I%20can%20turn%20to/HouGarden/Tool-Use/LangGraphTest/init.py)
 
-- `project`: environment name and Python version used by `init.py`.
-- `llm`: model name, OpenAI-compatible base URL, default generation settings, and local serving settings.
-- `mcp`: MCP server binding, manifest file path, and request timeout.
-- `gateway`: gateway binding, debug flags, and in-memory trace store size.
-- `logging`: log level and optional JSON logging.
+`start` 启动器会：
 
-### Tool manifest
+- 检查 conda 环境是否存在
+- 使用 `conda run -n <env>` 执行 [start.py](/E:/something%20I%20can%20turn%20to/HouGarden/Tool-Use/LangGraphTest/start.py)
+- 按顺序启动 LLM、MCP、Gateway
 
-`config/tools.yaml` stores:
+## init.py 会做什么
 
-- Tool name
-- Short purpose description
-- Input fields
-- Output fields
-- Mode (`read` or `write`)
-- Risk level
-- Future extension notes
+[init.py](/E:/something%20I%20can%20turn%20to/HouGarden/Tool-Use/LangGraphTest/init.py) 现在不负责创建环境，它只负责当前 conda 环境内部的初始化：
 
-## Default Model
+- 升级 `pip`
+- 安装 [requirements.txt](/E:/something%20I%20can%20turn%20to/HouGarden/Tool-Use/LangGraphTest/requirements.txt)
+- 按配置下载模型到 `models/`
+- 在 Windows / macOS 上自动把 `vllm` 回退为 `transformers`
 
-The default model config uses the official Qwen model:
+## start.py 会做什么
+
+[start.py](/E:/something%20I%20can%20turn%20to/HouGarden/Tool-Use/LangGraphTest/start.py) 会：
+
+- 启动本地 LLM 服务
+- 启动 MCP 服务
+- 启动 Gateway 服务
+- 逐个检查 `/health`
+- 将日志写入 `logs/`
+
+## 默认 conda 配置
+
+当前 [config/config.yaml](/E:/something%20I%20can%20turn%20to/HouGarden/Tool-Use/LangGraphTest/config/config.yaml) 中的默认环境配置是：
+
+```yaml
+project:
+  environment_name: lg_local_tool_service
+  python_version: "3.11"
+```
+
+## 默认模型配置
 
 ```yaml
 llm:
   model_name: Qwen/Qwen3-1.7B
   service:
+    server_backend: transformers
     model_source: Qwen/Qwen3-1.7B
+    model_cache_dir: models
 ```
 
-## How To Swap Models
+## 单独服务脚本
 
-To swap the model later, only change `config/config.yaml`:
+如果你已经进入目标 conda 环境，也可以继续使用 `scripts/` 下的服务脚本：
 
-1. Update `llm.model_name`.
-2. Update `llm.service.model_source`.
-3. If needed, adjust `tensor_parallel_size`, `dtype`, or `base_url`.
+- [scripts/start_llm.sh](/E:/something%20I%20can%20turn%20to/HouGarden/Tool-Use/LangGraphTest/scripts/start_llm.sh)
+- [scripts/start_mcp.sh](/E:/something%20I%20can%20turn%20to/HouGarden/Tool-Use/LangGraphTest/scripts/start_mcp.sh)
+- [scripts/start_gateway.sh](/E:/something%20I%20can%20turn%20to/HouGarden/Tool-Use/LangGraphTest/scripts/start_gateway.sh)
 
-No application code changes should be required if the new backend is still OpenAI-compatible.
+## 日志
 
-## LangGraph Design
-
-The gateway builds a minimal but extensible graph with these nodes:
-
-1. `normalize_input`
-2. `classify_intent`
-3. `plan_tool_calls`
-4. `execute_tools`
-5. `review_results`
-6. `finalize`
-
-### How it works
-
-- `normalize_input` cleans the latest user message.
-- `classify_intent` asks the local model to label the request as tool lookup, read, write, or general.
-- `plan_tool_calls` fetches the MCP tool manifest and asks the model which tools should be called.
-- `execute_tools` sends the planned calls to the MCP server.
-- `review_results` annotates mock data and tool failures.
-- `finalize` asks the model to write the final answer using the reviewed tool output.
-
-## Gateway API
-
-The gateway exposes:
-
-- `POST /v1/chat`
-- `GET /health`
-- `GET /v1/tools`
-- `GET /v1/traces/{trace_id}`
-
-## How LangGraph Interacts With MCP
-
-The gateway does not import tool business logic directly. Instead:
-
-1. It reads the user request.
-2. It plans tool calls using the tool manifest served by the MCP server.
-3. It invokes tools through the MCP server HTTP API.
-4. It reviews the results and returns an answer.
-
-This keeps the orchestration layer separate from tool execution, which makes later replacement of mock tools safer.
-
-## How To Add A New Tool
-
-1. Add the tool entry to `config/tools.yaml`.
-2. Add request schema models in `app/mcp_server/tool_schemas.py`.
-3. Implement the handler in `app/mcp_server/tools/`.
-4. Register the handler in `app/mcp_server/registry.py`.
-5. Update prompt wording in `app/graph/prompts.py` if the new tool changes planning behavior.
-
-## Replacing Mock Tool Logic With Real Data Access
-
-Right now the business-facing tools return mock responses marked with `source: mock_data` or `write_status: mock_not_persisted`.
-
-To replace them with real database code later:
-
-1. Keep the input and output schemas stable.
-2. Replace the placeholder logic inside the tool functions with repository or service calls.
-3. Keep validation in the schema layer.
-4. Preserve the same handler registration path so the gateway does not need to change.
-
-This makes it possible to move from local mocks to real persistence without redesigning the graph.
-
-## Initialization
-
-`init.py` can:
-
-- Create a new conda environment
-- Install required packages
-- Ensure the expected project folders exist
-- Print model preparation commands for the configured Qwen model
-
-Example:
-
-```bash
-python init.py
-python init.py --skip-conda
-python init.py --skip-install
-```
-
-## Notes
-
-- Python 3.11+ is assumed.
-- This scaffold intentionally avoids Docker, Kubernetes, Redis, Celery, authentication, and real database integration.
-- The write tools are placeholders and do not persist changes yet.
+- `logs/llm.log`
+- `logs/mcp.log`
+- `logs/gateway.log`

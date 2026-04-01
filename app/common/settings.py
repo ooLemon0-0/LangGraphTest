@@ -36,6 +36,9 @@ class LLMServiceSettings(ServiceBinding):
     model_source: str
     tensor_parallel_size: int = 1
     dtype: str = "auto"
+    model_cache_dir: str = "models"
+    device: str = "auto"
+    trust_remote_code: bool = False
 
 
 class LLMSettings(BaseModel):

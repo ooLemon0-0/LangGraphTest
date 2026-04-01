@@ -2,36 +2,39 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CONFIG_PATH="${ROOT_DIR}/config/config.yaml"
-
-read_config() {
-  python - "$CONFIG_PATH" "$1" <<'PY'
+cd "$ROOT_DIR"
+exec python - <<'PY'
+from app.common.settings import get_settings
+import os
+import platform
+import subprocess
 import sys
-import yaml
 
-config_path = sys.argv[1]
-field = sys.argv[2]
+settings = get_settings()
+backend = settings.llm.service.server_backend.strip().lower()
+if backend == "vllm" and (os.name == "nt" or platform.system().lower() == "darwin"):
+    backend = "transformers"
 
-with open(config_path, "r", encoding="utf-8") as handle:
-    config = yaml.safe_load(handle)
+if backend == "vllm":
+    command = [
+        sys.executable,
+        "-m",
+        "vllm.entrypoints.openai.api_server",
+        "--host",
+        settings.llm.service.host,
+        "--port",
+        str(settings.llm.service.port),
+        "--model",
+        settings.llm.service.model_source,
+        "--dtype",
+        settings.llm.service.dtype,
+        "--tensor-parallel-size",
+        str(settings.llm.service.tensor_parallel_size),
+        "--download-dir",
+        str((__import__("pathlib").Path.cwd() / settings.llm.service.model_cache_dir).resolve()),
+    ]
+else:
+    command = [sys.executable, "-m", "app.llm_server.main"]
 
-parts = field.split(".")
-value = config
-for part in parts:
-    value = value[part]
-print(value)
+raise SystemExit(subprocess.call(command))
 PY
-}
-
-HOST="$(read_config llm.service.host)"
-PORT="$(read_config llm.service.port)"
-MODEL_SOURCE="$(read_config llm.service.model_source)"
-DTYPE="$(read_config llm.service.dtype)"
-TENSOR_PARALLEL_SIZE="$(read_config llm.service.tensor_parallel_size)"
-
-exec python -m vllm.entrypoints.openai.api_server \
-  --host "$HOST" \
-  --port "$PORT" \
-  --model "$MODEL_SOURCE" \
-  --dtype "$DTYPE" \
-  --tensor-parallel-size "$TENSOR_PARALLEL_SIZE"

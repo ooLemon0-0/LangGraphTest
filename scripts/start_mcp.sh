@@ -3,17 +3,24 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
-
-HOST="$(python - <<'PY'
+exec python - <<'PY'
 from app.common.settings import get_settings
-print(get_settings().mcp.service.host)
-PY
-)"
+import subprocess
+import sys
 
-PORT="$(python - <<'PY'
-from app.common.settings import get_settings
-print(get_settings().mcp.service.port)
+settings = get_settings()
+raise SystemExit(
+    subprocess.call(
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "app.mcp_server.main:app",
+            "--host",
+            settings.mcp.service.host,
+            "--port",
+            str(settings.mcp.service.port),
+        ]
+    )
+)
 PY
-)"
-
-exec python -m uvicorn app.mcp_server.main:app --host "$HOST" --port "$PORT"

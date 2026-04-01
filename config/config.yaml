@@ -14,10 +14,13 @@ llm:
   service:
     host: 127.0.0.1
     port: 8001
-    server_backend: vllm
+    server_backend: transformers
     model_source: Qwen/Qwen3-1.7B
     tensor_parallel_size: 1
     dtype: auto
+    model_cache_dir: models
+    device: auto
+    trust_remote_code: false
 
 mcp:
   service:
