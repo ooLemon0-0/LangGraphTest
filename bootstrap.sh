@@ -3,14 +3,16 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_PATH="${ROOT_DIR}/config/config.yaml"
-PYTORCH_CHANNEL="pytorch"
-NVIDIA_CHANNEL="nvidia"
-CUDA_PACKAGE_VERSION="12.4"
+PYTORCH_CHANNEL="${PYTORCH_CHANNEL:-pytorch}"
+NVIDIA_CHANNEL="${NVIDIA_CHANNEL:-nvidia}"
+PYTORCH_VERSION="${PYTORCH_VERSION:-2.5.1}"
+TORCHVISION_VERSION="${TORCHVISION_VERSION:-0.20.1}"
+TORCHAUDIO_VERSION="${TORCHAUDIO_VERSION:-2.5.1}"
+PYTORCH_CUDA_VERSION="${PYTORCH_CUDA_VERSION:-12.4}"
 
-if ! command -v conda >/dev/null 2>&1; then
-  echo "[bootstrap] conda was not found in PATH."
-  exit 1
-fi
+log() {
+  echo "[bootstrap] $*"
+}
 
 read_project_value() {
   local key="$1"
@@ -27,54 +29,100 @@ read_project_value() {
   ' "$CONFIG_PATH"
 }
 
+ensure_conda_available() {
+  if ! command -v conda >/dev/null 2>&1; then
+    log "conda was not found in PATH."
+    exit 1
+  fi
+}
+
+remove_pip_torch_packages() {
+  log "Removing pip-installed torch packages from conda env ${ENV_NAME} if present"
+  conda run --no-capture-output -n "$ENV_NAME" python -m pip uninstall -y torch torchvision torchaudio >/dev/null 2>&1 || true
+}
+
+remove_conda_torch_packages() {
+  log "Removing existing conda PyTorch packages from conda env ${ENV_NAME} if present"
+  conda remove -n "$ENV_NAME" -y pytorch torchvision torchaudio pytorch-cuda >/dev/null 2>&1 || true
+}
+
+print_torch_state() {
+  local stage="$1"
+  log "PyTorch runtime snapshot (${stage})"
+  conda run --no-capture-output -n "$ENV_NAME" python - <<'PY'
+import importlib.util
+import sys
+
+print(f"[bootstrap] sys.executable={sys.executable}")
+spec = importlib.util.find_spec("torch")
+print(f"[bootstrap] torch.spec={'present' if spec else 'missing'}")
+if spec is None:
+    raise SystemExit(0)
+
+import torch
+
+print(f"[bootstrap] torch.__version__={torch.__version__}")
+print(f"[bootstrap] torch.version.cuda={torch.version.cuda}")
+print(f"[bootstrap] torch.cuda.is_available()={torch.cuda.is_available()}")
+print(f"[bootstrap] torch.cuda.device_count()={torch.cuda.device_count()}")
+PY
+}
+
+install_conda_gpu_torch() {
+  log "Installing CUDA-enabled PyTorch with conda into ${ENV_NAME}"
+  log "Command: conda install -n ${ENV_NAME} -y pytorch=${PYTORCH_VERSION} torchvision=${TORCHVISION_VERSION} torchaudio=${TORCHAUDIO_VERSION} pytorch-cuda=${PYTORCH_CUDA_VERSION} -c ${PYTORCH_CHANNEL} -c ${NVIDIA_CHANNEL}"
+  conda install -n "$ENV_NAME" -y \
+    "pytorch=${PYTORCH_VERSION}" \
+    "torchvision=${TORCHVISION_VERSION}" \
+    "torchaudio=${TORCHAUDIO_VERSION}" \
+    "pytorch-cuda=${PYTORCH_CUDA_VERSION}" \
+    -c "$PYTORCH_CHANNEL" \
+    -c "$NVIDIA_CHANNEL"
+}
+
 ensure_gpu_runtime() {
   if [[ "$(uname -s)" != "Linux" ]]; then
-    echo "[bootstrap] Non-Linux platform detected, skipping CUDA runtime bootstrap."
+    log "Non-Linux platform detected, skipping CUDA runtime bootstrap."
     return
   fi
 
   if ! command -v nvidia-smi >/dev/null 2>&1; then
-    echo "[bootstrap] nvidia-smi not found, skipping CUDA runtime bootstrap."
+    log "nvidia-smi not found, skipping CUDA runtime bootstrap."
     return
   fi
 
-  echo "[bootstrap] Checking PyTorch CUDA availability in conda env ${ENV_NAME}"
-  if conda run --no-capture-output -n "$ENV_NAME" python -c "import torch; raise SystemExit(0 if torch.cuda.is_available() else 1)" >/dev/null 2>&1; then
-    echo "[bootstrap] PyTorch CUDA is already available."
-    return
-  fi
-
-  echo "[bootstrap] Resetting existing PyTorch packages in ${ENV_NAME}"
-  conda remove -n "$ENV_NAME" -y pytorch torchvision torchaudio pytorch-cuda >/dev/null 2>&1 || true
-
-  echo "[bootstrap] Installing CUDA-enabled PyTorch into ${ENV_NAME}"
-  echo "[bootstrap] Command: conda install -n ${ENV_NAME} -y pytorch torchvision torchaudio pytorch-cuda=${CUDA_PACKAGE_VERSION} -c ${PYTORCH_CHANNEL} -c ${NVIDIA_CHANNEL}"
-  conda install -n "$ENV_NAME" -y \
-    pytorch torchvision torchaudio "pytorch-cuda=${CUDA_PACKAGE_VERSION}" \
-    -c "$PYTORCH_CHANNEL" -c "$NVIDIA_CHANNEL"
-
-  echo "[bootstrap] Verifying PyTorch CUDA availability"
-  conda run --no-capture-output -n "$ENV_NAME" python -c "import torch; print(torch.__version__); print(torch.version.cuda); print(torch.cuda.is_available()); print(torch.cuda.device_count())"
+  log "Linux + NVIDIA detected. PyTorch install mode: conda"
+  print_torch_state "before cleanup"
+  remove_pip_torch_packages
+  remove_conda_torch_packages
+  install_conda_gpu_torch
+  print_torch_state "after conda install"
 }
+
+ensure_conda_available
 
 ENV_NAME="$(read_project_value environment_name)"
 PYTHON_VERSION="$(read_project_value python_version)"
 
 if [[ -z "${ENV_NAME}" || -z "${PYTHON_VERSION}" ]]; then
-  echo "[bootstrap] Failed to read conda environment config from config/config.yaml."
+  log "Failed to read conda environment config from config/config.yaml."
   exit 1
 fi
 
+log "Project root: ${ROOT_DIR}"
+log "Target conda env: ${ENV_NAME}"
+log "Requested Python version: ${PYTHON_VERSION}"
+
 if ! conda env list | awk '{print $1}' | grep -Fxq "$ENV_NAME"; then
-  echo "[bootstrap] Creating conda env: ${ENV_NAME} (python=${PYTHON_VERSION})"
+  log "Creating conda env: ${ENV_NAME} (python=${PYTHON_VERSION})"
   conda create -n "$ENV_NAME" "python=${PYTHON_VERSION}" -y
 else
-  echo "[bootstrap] Using existing conda env: ${ENV_NAME}"
+  log "Using existing conda env: ${ENV_NAME}"
 fi
 
 ensure_gpu_runtime
 
 cd "$ROOT_DIR"
-echo "[bootstrap] Running init.py inside conda env ${ENV_NAME}"
-echo "[bootstrap] Command: conda run --no-capture-output -n ${ENV_NAME} python -u init.py $*"
+log "Running init.py inside conda env ${ENV_NAME}"
+log "Command: conda run --no-capture-output -n ${ENV_NAME} python -u init.py $*"
 exec conda run --no-capture-output -n "$ENV_NAME" python -u init.py "$@"

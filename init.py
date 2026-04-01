@@ -25,6 +25,9 @@ DEFAULTS = {
     "llm.service.download_timeout": "60",
 }
 TORCH_REQUIREMENT_PREFIXES = ("torch", "torchvision", "torchaudio")
+DEFAULT_PIP_INDEX_URL = "https://pypi.tuna.tsinghua.edu.cn/simple"
+OFFICIAL_PIP_INDEX_URL = "https://pypi.org/simple"
+DEFAULT_HF_ENDPOINT = "https://hf-mirror.com"
 
 
 def parse_args() -> argparse.Namespace:
@@ -34,6 +37,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-model", action="store_true", help="Skip model download.")
     parser.add_argument("--force", action="store_true", help="Force dependency upgrades while installing.")
     return parser.parse_args()
+
+
+def log(message: str) -> None:
+    """Print a consistently formatted init log line."""
+    print(f"[init] {message}")
 
 
 def ensure_directories() -> None:
@@ -87,11 +95,9 @@ def parse_yaml_scalars(path: Path, defaults: dict[str, str]) -> dict[str, str]:
     return values
 
 
-def run_command(command: list[str], description: str) -> None:
-    """Run one subprocess and stop on failure."""
-    print(f"[init] {description}")
-    print("       " + " ".join(command))
-    subprocess.run(command, cwd=ROOT_DIR, check=True)
+def current_conda_env() -> str:
+    """Return the active conda environment name if present."""
+    return os.environ.get("CONDA_DEFAULT_ENV", "").strip()
 
 
 def command_exists(name: str) -> bool:
@@ -103,38 +109,143 @@ def effective_backend(config: dict[str, str]) -> str:
     """Resolve the backend actually used on the current OS."""
     backend = config["llm.service.server_backend"].strip().lower()
     if backend == "vllm" and os.name == "nt":
-        print("[init] Windows detected, automatically switching vLLM to transformers.")
+        log("Windows detected, automatically switching vLLM to transformers.")
         return "transformers"
     if backend == "vllm" and sys.platform == "darwin":
-        print("[init] macOS detected, automatically switching vLLM to transformers.")
+        log("macOS detected, automatically switching vLLM to transformers.")
         return "transformers"
     return backend
 
 
+def pip_index_url() -> str:
+    """Return the preferred primary pip index URL."""
+    return (
+        os.environ.get("PIP_INDEX_URL")
+        or os.environ.get("BOOTSTRAP_PIP_INDEX_URL")
+        or DEFAULT_PIP_INDEX_URL
+    )
+
+
+def pip_extra_index_urls() -> list[str]:
+    """Return configured extra pip index URLs."""
+    raw = os.environ.get("PIP_EXTRA_INDEX_URL") or os.environ.get("BOOTSTRAP_PIP_EXTRA_INDEX_URL", "")
+    return [value.strip() for value in raw.split() if value.strip()]
+
+
+def run_command(command: list[str], description: str, env: dict[str, str] | None = None) -> None:
+    """Run one subprocess and stop on failure."""
+    log(description)
+    print("       " + " ".join(command))
+    subprocess.run(command, cwd=ROOT_DIR, check=True, env=env)
+
+
+def build_pip_env(index_url: str, extra_index_urls: list[str] | None = None) -> dict[str, str]:
+    """Create a pip environment override for one installation attempt."""
+    env = os.environ.copy()
+    env["PIP_INDEX_URL"] = index_url
+    extras = extra_index_urls if extra_index_urls is not None else pip_extra_index_urls()
+    if extras:
+        env["PIP_EXTRA_INDEX_URL"] = " ".join(extras)
+    else:
+        env.pop("PIP_EXTRA_INDEX_URL", None)
+    return env
+
+
+def build_pip_command(*packages: str, upgrade: bool = False) -> list[str]:
+    """Construct a reusable pip install command."""
+    command = [sys.executable, "-m", "pip", "install"]
+    if upgrade:
+        command.append("--upgrade")
+    command.extend(packages)
+    return command
+
+
+def run_pip_install(*packages: str, description: str, upgrade: bool = False) -> None:
+    """Install Python packages with domestic mirror first, then fall back to the official index."""
+    attempts = [
+        ("preferred", pip_index_url(), pip_extra_index_urls()),
+        ("official", OFFICIAL_PIP_INDEX_URL, []),
+    ]
+    seen: set[tuple[str, tuple[str, ...]]] = set()
+    command = build_pip_command(*packages, upgrade=upgrade)
+    last_error: subprocess.CalledProcessError | None = None
+
+    for label, index_url, extra_urls in attempts:
+        key = (index_url, tuple(extra_urls))
+        if key in seen:
+            continue
+        seen.add(key)
+
+        env = build_pip_env(index_url=index_url, extra_index_urls=extra_urls)
+        log(f"{description} via pip ({label} index)")
+        log(f"Python executable: {sys.executable}")
+        log(f"pip index-url: {env['PIP_INDEX_URL']}")
+        if env.get("PIP_EXTRA_INDEX_URL"):
+            log(f"pip extra-index-url: {env['PIP_EXTRA_INDEX_URL']}")
+        else:
+            log("pip extra-index-url: <none>")
+        print("       " + " ".join(command))
+
+        try:
+            subprocess.run(command, cwd=ROOT_DIR, check=True, env=env)
+            return
+        except subprocess.CalledProcessError as exc:
+            last_error = exc
+            log(f"{description} failed via {label} index with exit code {exc.returncode}")
+
+    if last_error is not None:
+        raise last_error
+
+
+def detect_torch_installation_source() -> str:
+    """Best-effort classification of how torch is installed in the active interpreter."""
+    if importlib.util.find_spec("torch") is None:
+        return "missing"
+
+    torch_module = __import__("torch")
+    location = Path(getattr(torch_module, "__file__", "")).resolve()
+    location_text = str(location).lower()
+    if "site-packages" in location_text:
+        return "pip-or-python-site-packages"
+    if "conda" in location_text:
+        return "conda"
+    return "unknown"
+
+
+def print_torch_runtime_snapshot(stage: str) -> None:
+    """Log the current torch runtime state for observability."""
+    source = detect_torch_installation_source()
+    log(f"PyTorch installation mode ({stage}): {source}")
+    if importlib.util.find_spec("torch") is None:
+        log("PyTorch module import: missing")
+        return
+
+    import torch
+
+    log(f"torch.__version__: {torch.__version__}")
+    log(f"torch.version.cuda: {torch.version.cuda}")
+    log(f"torch.cuda.is_available(): {torch.cuda.is_available()}")
+    log(f"torch.cuda.device_count(): {torch.cuda.device_count()}")
+    log(f"torch module path: {Path(torch.__file__).resolve()}")
+
+
 def install_packages(force: bool, backend: str) -> None:
     """Install project dependencies in the current interpreter environment."""
-    run_command([sys.executable, "-m", "pip", "install", "--upgrade", "pip"], "Upgrading pip")
-
-    install_torch_runtime(force=force)
+    print_torch_runtime_snapshot(stage="before pip installs")
+    run_pip_install("pip", description="Upgrading pip", upgrade=True)
     install_python_requirements(force=force)
 
     if backend == "vllm":
-        vllm_command = [sys.executable, "-m", "pip", "install"]
-        if force:
-            vllm_command.append("--upgrade")
-        vllm_command.append("vllm")
-        run_command(vllm_command, "Installing optional vLLM backend")
+        run_pip_install("vllm", description="Installing optional vLLM backend", upgrade=force)
+
+    print_torch_runtime_snapshot(stage="after pip installs")
 
 
 def install_python_requirements(force: bool) -> None:
     """Install project Python requirements excluding torch-family packages."""
     filtered_requirements = build_filtered_requirements_file()
     try:
-        install_command = [sys.executable, "-m", "pip", "install"]
-        if force:
-            install_command.append("--upgrade")
-        install_command.extend(["-r", str(filtered_requirements)])
-        run_command(install_command, "Installing project Python requirements")
+        run_pip_install("-r", str(filtered_requirements), description="Installing project Python requirements", upgrade=force)
     finally:
         filtered_requirements.unlink(missing_ok=True)
 
@@ -146,6 +257,7 @@ def build_filtered_requirements_file() -> Path:
         raise FileNotFoundError(f"requirements.txt was not found: {source}")
 
     filtered_lines: list[str] = []
+    removed_lines: list[str] = []
     for raw_line in source.read_text(encoding="utf-8").splitlines():
         stripped = raw_line.strip()
         if not stripped or stripped.startswith("#"):
@@ -153,8 +265,16 @@ def build_filtered_requirements_file() -> Path:
             continue
         normalized = stripped.lower()
         if normalized.startswith(TORCH_REQUIREMENT_PREFIXES):
+            removed_lines.append(stripped)
             continue
         filtered_lines.append(raw_line)
+
+    if removed_lines:
+        log("Filtered torch-family packages from requirements.txt to avoid pip/conda mixing:")
+        for line in removed_lines:
+            log(f"  - {line}")
+    else:
+        log("No torch-family packages found in requirements.txt")
 
     handle = tempfile.NamedTemporaryFile(
         mode="w",
@@ -167,28 +287,6 @@ def build_filtered_requirements_file() -> Path:
     with handle:
         handle.write("\n".join(filtered_lines) + "\n")
     return Path(handle.name)
-
-
-def install_torch_runtime(force: bool) -> None:
-    """Install torch with pip, using the official CUDA wheels on Linux NVIDIA hosts."""
-    pip_command = [sys.executable, "-m", "pip", "install"]
-    if force:
-        pip_command.append("--upgrade")
-    if sys.platform.startswith("linux") and command_exists("nvidia-smi"):
-        pip_command.extend(
-            [
-                "torch==2.5.1",
-                "torchvision==0.20.1",
-                "torchaudio==2.5.1",
-                "--index-url",
-                "https://download.pytorch.org/whl/cu124",
-            ]
-        )
-        run_command(pip_command, "Installing CUDA-enabled torch runtime with pip")
-        return
-
-    pip_command.extend(["torch", "torchvision", "torchaudio"])
-    run_command(pip_command, "Installing torch runtime with pip")
 
 
 def safe_rmtree(path: Path) -> None:
@@ -241,13 +339,10 @@ def is_network_timeout_error(exc: Exception) -> bool:
 def ensure_modelscope_installed(force: bool = False) -> None:
     """Install ModelScope only when needed, or upgrade it when forced."""
     if not force and importlib.util.find_spec("modelscope") is not None:
+        log("ModelScope already installed")
         return
 
-    command = [sys.executable, "-m", "pip", "install"]
-    if force:
-        command.append("--upgrade")
-    command.append("modelscope")
-    run_command(command, "Installing ModelScope")
+    run_pip_install("modelscope", description="Installing ModelScope", upgrade=force)
 
 
 def finalize_download(staging_dir: Path, target_dir: Path) -> Path:
@@ -277,10 +372,14 @@ def set_huggingface_timeout_env(timeout_seconds: int) -> dict[str, str | None]:
     previous = {
         "HF_HUB_DOWNLOAD_TIMEOUT": os.environ.get("HF_HUB_DOWNLOAD_TIMEOUT"),
         "HF_HUB_ETAG_TIMEOUT": os.environ.get("HF_HUB_ETAG_TIMEOUT"),
+        "HF_ENDPOINT": os.environ.get("HF_ENDPOINT"),
     }
     timeout_value = str(timeout_seconds)
     os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = timeout_value
     os.environ["HF_HUB_ETAG_TIMEOUT"] = timeout_value
+    os.environ.setdefault("HF_ENDPOINT", DEFAULT_HF_ENDPOINT)
+    log(f"Hugging Face endpoint: {os.environ['HF_ENDPOINT']}")
+    log(f"Hugging Face timeout: {timeout_value}s")
     return previous
 
 
@@ -295,7 +394,7 @@ def restore_env(previous: dict[str, str | None]) -> None:
 
 def download_from_modelscope(model_source_cn: str, staging_dir: Path) -> Path:
     """Download a model from ModelScope into the staging directory."""
-    print(f"[init] Downloading from ModelScope: {model_source_cn}")
+    log(f"Model download source: ModelScope ({model_source_cn})")
     from modelscope import snapshot_download  # type: ignore
 
     source_cache_dir = staging_dir.parent / f"{staging_dir.name}-modelscope-cache"
@@ -321,7 +420,7 @@ def download_from_modelscope(model_source_cn: str, staging_dir: Path) -> Path:
 
 def download_from_huggingface(model_source: str, staging_dir: Path, timeout_seconds: int) -> Path:
     """Download a model from Hugging Face into the staging directory."""
-    print(f"[init] Downloading from Hugging Face: {model_source}")
+    log(f"Model download source: Hugging Face ({model_source})")
     from huggingface_hub import snapshot_download
 
     previous_env = set_huggingface_timeout_env(timeout_seconds)
@@ -354,7 +453,7 @@ def download_model(
             ensure_modelscope_installed(force=force)
             download_from_modelscope(model_source_cn=model_source_cn, staging_dir=staging_dir)
             result = finalize_download(staging_dir=staging_dir, target_dir=target_dir)
-            print(f"[init] Model download complete via ModelScope: {result}")
+            log(f"Model download complete via ModelScope: {result}")
             return result
         except Exception as exc:
             safe_rmtree(staging_dir)
@@ -362,18 +461,35 @@ def download_model(
             if not is_network_timeout_error(exc):
                 raise
 
-            print(f"[init] ModelScope failed, falling back to Hugging Face: {exc}")
+            log(f"ModelScope failed, falling back to Hugging Face: {exc}")
             download_from_huggingface(
                 model_source=model_source,
                 staging_dir=staging_dir,
                 timeout_seconds=timeout_seconds,
             )
             result = finalize_download(staging_dir=staging_dir, target_dir=target_dir)
-            print(f"[init] Model download complete via Hugging Face: {result}")
+            log(f"Model download complete via Hugging Face: {result}")
             return result
     except Exception:
         safe_rmtree(staging_dir)
         raise
+
+
+def print_runtime_context(backend: str) -> None:
+    """Log runtime context needed to diagnose environment mismatches."""
+    env_name = current_conda_env()
+    log(f"Active conda environment: {env_name or '<none>'}")
+    log(f"Python executable: {sys.executable}")
+    log(f"Platform: {sys.platform}")
+    log(f"Backend: {backend}")
+    log(f"PyTorch install strategy: conda on Linux+NVIDIA hosts; pip never installs torch in init.py")
+    log(f"Preferred pip index-url: {pip_index_url()}")
+    extras = pip_extra_index_urls()
+    if extras:
+        log(f"Preferred pip extra-index-url: {' '.join(extras)}")
+    else:
+        log("Preferred pip extra-index-url: <none>")
+    log(f"nvidia-smi available: {command_exists('nvidia-smi')}")
 
 
 def main() -> None:
@@ -381,14 +497,9 @@ def main() -> None:
     args = parse_args()
     config = load_config_values()
     backend = effective_backend(config)
-    env_name = current_conda_env()
 
     ensure_directories()
-
-    if not env_name:
-        print("[init] Warning: no active conda environment detected. This script is expected to run via bootstrap.")
-    else:
-        print(f"[init] Active conda environment: {env_name}")
+    print_runtime_context(backend=backend)
 
     if not args.skip_install:
         install_packages(force=args.force, backend=backend)
@@ -402,10 +513,10 @@ def main() -> None:
             force=args.force,
         )
 
-    print()
-    print("[init] Initialization complete.")
-    print(f"[init] Backend: {backend}")
-    print("[init] Next step: run the platform start launcher.")
+    log("")
+    log("Initialization complete.")
+    log(f"Backend: {backend}")
+    log("Next step: run the platform start launcher.")
 
 
 if __name__ == "__main__":
