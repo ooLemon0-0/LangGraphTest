@@ -10,6 +10,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import uuid
 from pathlib import Path
 
@@ -23,6 +24,7 @@ DEFAULTS = {
     "llm.service.model_cache_dir": "models",
     "llm.service.download_timeout": "60",
 }
+TORCH_REQUIREMENT_PREFIXES = ("torch", "torchvision", "torchaudio")
 
 
 def parse_args() -> argparse.Namespace:
@@ -97,6 +99,11 @@ def run_command(command: list[str], description: str) -> None:
     subprocess.run(command, cwd=ROOT_DIR, check=True)
 
 
+def command_exists(name: str) -> bool:
+    """Return True when a command is available on PATH."""
+    return shutil.which(name) is not None
+
+
 def effective_backend(config: dict[str, str]) -> str:
     """Resolve the backend actually used on the current OS."""
     backend = config["llm.service.server_backend"].strip().lower()
@@ -113,11 +120,8 @@ def install_packages(force: bool, backend: str) -> None:
     """Install project dependencies in the current interpreter environment."""
     run_command([sys.executable, "-m", "pip", "install", "--upgrade", "pip"], "Upgrading pip")
 
-    install_command = [sys.executable, "-m", "pip", "install"]
-    if force:
-        install_command.append("--upgrade")
-    install_command.extend(["-r", "requirements.txt"])
-    run_command(install_command, "Installing project dependencies")
+    install_torch_runtime(force=force)
+    install_python_requirements(force=force)
 
     if backend == "vllm":
         vllm_command = [sys.executable, "-m", "pip", "install"]
@@ -125,6 +129,118 @@ def install_packages(force: bool, backend: str) -> None:
             vllm_command.append("--upgrade")
         vllm_command.append("vllm")
         run_command(vllm_command, "Installing optional vLLM backend")
+
+
+def install_python_requirements(force: bool) -> None:
+    """Install project Python requirements excluding torch-family packages."""
+    filtered_requirements = build_filtered_requirements_file()
+    try:
+        install_command = [sys.executable, "-m", "pip", "install"]
+        if force:
+            install_command.append("--upgrade")
+        install_command.extend(["-r", str(filtered_requirements)])
+        run_command(install_command, "Installing project Python requirements")
+    finally:
+        filtered_requirements.unlink(missing_ok=True)
+
+
+def build_filtered_requirements_file() -> Path:
+    """Create a temporary requirements file without torch-family packages."""
+    source = ROOT_DIR / "requirements.txt"
+    if not source.exists():
+        raise FileNotFoundError(f"requirements.txt was not found: {source}")
+
+    filtered_lines: list[str] = []
+    for raw_line in source.read_text(encoding="utf-8").splitlines():
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#"):
+            filtered_lines.append(raw_line)
+            continue
+        normalized = stripped.lower()
+        if normalized.startswith(TORCH_REQUIREMENT_PREFIXES):
+            continue
+        filtered_lines.append(raw_line)
+
+    handle = tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        prefix="requirements.filtered.",
+        suffix=".txt",
+        dir=str(ROOT_DIR),
+        delete=False,
+    )
+    with handle:
+        handle.write("\n".join(filtered_lines) + "\n")
+    return Path(handle.name)
+
+
+def install_torch_runtime(force: bool) -> None:
+    """Install an appropriate torch runtime without mixing pip and conda variants."""
+    env_name = current_conda_env()
+    if sys.platform.startswith("linux") and command_exists("nvidia-smi") and env_name:
+        install_conda_torch(env_name=env_name, force=force)
+        return
+
+    pip_command = [sys.executable, "-m", "pip", "install"]
+    if force:
+        pip_command.append("--upgrade")
+    pip_command.extend(["torch", "torchvision", "torchaudio"])
+    run_command(pip_command, "Installing torch runtime with pip")
+
+
+def install_conda_torch(env_name: str, force: bool) -> None:
+    """Install CUDA-enabled torch via conda for Linux NVIDIA hosts."""
+    verify_command = [
+        "conda",
+        "run",
+        "--no-capture-output",
+        "-n",
+        env_name,
+        "python",
+        "-c",
+        "import torch; raise SystemExit(0 if torch.cuda.is_available() else 1)",
+    ]
+    verified = subprocess.run(
+        verify_command,
+        cwd=ROOT_DIR,
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    if verified.returncode == 0 and not force:
+        print(f"[init] CUDA-enabled PyTorch already available in conda env {env_name}.")
+        return
+
+    remove_command = [
+        "conda",
+        "remove",
+        "-n",
+        env_name,
+        "-y",
+        "pytorch",
+        "torchvision",
+        "torchaudio",
+        "pytorch-cuda",
+    ]
+    print(f"[init] Resetting torch runtime in conda env {env_name}.")
+    subprocess.run(remove_command, cwd=ROOT_DIR, check=False)
+
+    install_command = [
+        "conda",
+        "install",
+        "-n",
+        env_name,
+        "-y",
+        "pytorch",
+        "torchvision",
+        "torchaudio",
+        "pytorch-cuda=12.4",
+        "-c",
+        "pytorch",
+        "-c",
+        "nvidia",
+    ]
+    run_command(install_command, "Installing CUDA-enabled PyTorch with conda")
 
 
 def safe_rmtree(path: Path) -> None:

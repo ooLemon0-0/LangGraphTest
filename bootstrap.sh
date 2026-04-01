@@ -44,6 +44,9 @@ ensure_gpu_runtime() {
     return
   fi
 
+  echo "[bootstrap] Resetting existing PyTorch packages in ${ENV_NAME}"
+  conda remove -n "$ENV_NAME" -y pytorch torchvision torchaudio pytorch-cuda >/dev/null 2>&1 || true
+
   echo "[bootstrap] Installing CUDA-enabled PyTorch into ${ENV_NAME}"
   echo "[bootstrap] Command: conda install -n ${ENV_NAME} -y pytorch torchvision torchaudio pytorch-cuda=${CUDA_PACKAGE_VERSION} -c ${PYTORCH_CHANNEL} -c ${NVIDIA_CHANNEL}"
   conda install -n "$ENV_NAME" -y \
