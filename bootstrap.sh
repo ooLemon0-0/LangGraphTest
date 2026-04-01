@@ -41,4 +41,5 @@ fi
 
 cd "$ROOT_DIR"
 echo "[bootstrap] 在 conda 环境中执行 init.py"
-exec conda run -n "$ENV_NAME" python init.py "$@"
+echo "[bootstrap] Command: conda run --no-capture-output -n ${ENV_NAME} python -u init.py $*"
+exec conda run --no-capture-output -n "$ENV_NAME" python -u init.py "$@"
