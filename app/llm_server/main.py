@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from typing import Any
+from pathlib import Path
 
 import torch
 import uvicorn
@@ -54,29 +55,39 @@ class ModelRuntime:
             return
 
         llm_service = settings.llm.service
-        model_path = resolve_from_root(llm_service.model_cache_dir)
+        model_root = resolve_from_root(llm_service.model_cache_dir)
+        model_path = self._resolve_model_path(model_root, llm_service.model_source)
         self.device = self._resolve_device(llm_service.device)
         torch_dtype = self._resolve_dtype(llm_service.dtype, self.device)
         logger.info(
             "Loading local model from %s (device=%s, dtype=%s)",
-            llm_service.model_source,
+            model_path,
             self.device,
             torch_dtype,
         )
 
         self.tokenizer = AutoTokenizer.from_pretrained(
-            llm_service.model_source,
-            cache_dir=str(model_path),
+            str(model_path),
+            cache_dir=str(model_root),
             trust_remote_code=llm_service.trust_remote_code,
         )
         self.model = AutoModelForCausalLM.from_pretrained(
-            llm_service.model_source,
-            cache_dir=str(model_path),
+            str(model_path),
+            cache_dir=str(model_root),
             torch_dtype=torch_dtype,
             trust_remote_code=llm_service.trust_remote_code,
         )
         self.model.to(self.device)
         self.model.eval()
+
+    @staticmethod
+    def _resolve_model_path(model_root: Path, configured_source: str) -> Path | str:
+        """Prefer a fully downloaded local model directory when available."""
+        model_name = configured_source.strip().rstrip("/").split("/")[-1]
+        local_model_dir = (model_root / model_name).resolve()
+        if local_model_dir.exists():
+            return local_model_dir
+        return configured_source
 
     def generate(self, messages: list[ChatCompletionMessage], temperature: float, max_tokens: int) -> str:
         """Generate one assistant message from chat input."""
