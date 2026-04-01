@@ -482,7 +482,7 @@ def print_runtime_context(backend: str) -> None:
     log(f"Python executable: {sys.executable}")
     log(f"Platform: {sys.platform}")
     log(f"Backend: {backend}")
-    log(f"PyTorch install strategy: conda on Linux+NVIDIA hosts; pip never installs torch in init.py")
+    log("PyTorch install strategy: bootstrap.sh owns torch installation; init.py never installs torch/torchvision/torchaudio")
     log(f"Preferred pip index-url: {pip_index_url()}")
     extras = pip_extra_index_urls()
     if extras:
