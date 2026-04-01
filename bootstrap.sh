@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_PATH="${ROOT_DIR}/config/config.yaml"
 
 if ! command -v conda >/dev/null 2>&1; then
-  echo "[bootstrap] conda 未安装或不在 PATH 中。"
+  echo "[bootstrap] conda was not found in PATH."
   exit 1
 fi
 
@@ -28,18 +28,18 @@ ENV_NAME="$(read_project_value environment_name)"
 PYTHON_VERSION="$(read_project_value python_version)"
 
 if [[ -z "${ENV_NAME}" || -z "${PYTHON_VERSION}" ]]; then
-  echo "[bootstrap] 无法从 config/config.yaml 读取 conda 环境配置。"
+  echo "[bootstrap] Failed to read conda environment config from config/config.yaml."
   exit 1
 fi
 
 if ! conda env list | awk '{print $1}' | grep -Fxq "$ENV_NAME"; then
-  echo "[bootstrap] 创建 conda 环境: ${ENV_NAME} (python=${PYTHON_VERSION})"
+  echo "[bootstrap] Creating conda env: ${ENV_NAME} (python=${PYTHON_VERSION})"
   conda create -n "$ENV_NAME" "python=${PYTHON_VERSION}" -y
 else
-  echo "[bootstrap] 使用已有 conda 环境: ${ENV_NAME}"
+  echo "[bootstrap] Using existing conda env: ${ENV_NAME}"
 fi
 
 cd "$ROOT_DIR"
-echo "[bootstrap] 在 conda 环境中执行 init.py"
+echo "[bootstrap] Running init.py inside conda env ${ENV_NAME}"
 echo "[bootstrap] Command: conda run --no-capture-output -n ${ENV_NAME} python -u init.py $*"
 exec conda run --no-capture-output -n "$ENV_NAME" python -u init.py "$@"

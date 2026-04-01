@@ -144,6 +144,21 @@ def main() -> None:
     processes: list[subprocess.Popen[str]] = []
     log_handles: list[object] = []
     try:
+        print("[start] Preparing services:")
+        print(
+            f"[start]   llm -> http://{settings.llm.service.host}:{settings.llm.service.port} "
+            f"(log: {logs_dir / 'llm.log'})"
+        )
+        print(
+            f"[start]   mcp -> http://{settings.mcp.service.host}:{settings.mcp.service.port} "
+            f"(log: {logs_dir / 'mcp.log'})"
+        )
+        print(
+            f"[start]   gateway -> http://{settings.gateway.service.host}:{settings.gateway.service.port} "
+            f"(log: {logs_dir / 'gateway.log'})"
+        )
+        print("[start] Starting services...")
+
         for name, command, health_url in commands:
             process, log_handle = launch_process(command, logs_dir / f"{name}.log")
             processes.append(process)
