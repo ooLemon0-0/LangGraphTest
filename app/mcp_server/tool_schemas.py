@@ -23,6 +23,9 @@ class ToolManifestEntry(BaseModel):
     mode: Literal["read", "write"]
     risk_level: Literal["low", "medium", "high"]
     future_extension_notes: str
+    tags: list[str] = Field(default_factory=list)
+    business_domain: str = ""
+    permission: str = ""
 
 
 class ToolManifest(BaseModel):
@@ -90,3 +93,15 @@ class ToolExecutionResult(BaseModel):
     mock: bool = True
     result: dict[str, Any] = Field(default_factory=dict)
     error: str | None = None
+
+
+TOOL_INPUT_MODELS = {
+    "list_tools": ListToolsInput,
+    "get_tool_detail": GetToolDetailInput,
+    "get_agent_id_by_name": GetAgentIdByNameInput,
+    "get_houses_by_agent_id": GetHousesByAgentIdInput,
+    "get_agent_by_house_id": GetAgentByHouseIdInput,
+    "get_house_detail": GetHouseDetailInput,
+    "update_house_name": UpdateHouseNameInput,
+    "update_house_price": UpdateHousePriceInput,
+}

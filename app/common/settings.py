@@ -51,6 +51,11 @@ class LLMSettings(BaseModel):
     temperature: float = 0.1
     max_tokens: int = 512
     timeout_seconds: int = 60
+    planner_temperature: float = 0.0
+    planner_max_tokens: int = 128
+    summarize_enabled: bool = False
+    summarize_temperature: float = 0.1
+    summarize_max_tokens: int = 256
     service: LLMServiceSettings
 
 

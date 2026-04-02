@@ -1,6 +1,9 @@
 tools:
   - name: list_tools
     description: List every tool the system can use. Use this when you need to know what tools exist before choosing one.
+    tags: [tools, manifest, discovery]
+    business_domain: meta
+    permission: read
     input_fields: []
     output_fields:
       - name
@@ -12,6 +15,9 @@ tools:
     future_extension_notes: Can later filter by category, mode, or user role.
   - name: get_tool_detail
     description: Get the full manifest entry for one tool. Use this when you need the exact input and output fields for a tool.
+    tags: [tools, manifest, discovery]
+    business_domain: meta
+    permission: read
     input_fields:
       - tool_name
     output_fields:
@@ -27,6 +33,9 @@ tools:
     future_extension_notes: Can later include examples, constraints, and usage counters.
   - name: get_agent_id_by_name
     description: Find an agent id from a human-readable agent name. Use this before house queries if the caller only knows the agent name.
+    tags: [agent, lookup, identity]
+    business_domain: agent
+    permission: read
     input_fields:
       - agent_name
     output_fields:
@@ -38,6 +47,9 @@ tools:
     future_extension_notes: Replace mock lookup with CRM or identity service query.
   - name: get_houses_by_agent_id
     description: List houses for one agent id. Use this when you already know the agent id and need the houses linked to that agent.
+    tags: [agent, house, lookup]
+    business_domain: housing
+    permission: read
     input_fields:
       - agent_id
     output_fields:
@@ -49,6 +61,9 @@ tools:
     future_extension_notes: Add paging, filters, and real repository access.
   - name: get_agent_by_house_id
     description: Find the agent assigned to one house id. Use this when you know a house id and need the owning agent.
+    tags: [agent, house, lookup]
+    business_domain: housing
+    permission: read
     input_fields:
       - house_id
     output_fields:
@@ -60,6 +75,9 @@ tools:
     future_extension_notes: Later join house and agent data from a database.
   - name: get_house_detail
     description: Get the full detail for one house id. Use this when you need the current name, price, status, and linked agent id.
+    tags: [house, detail, lookup]
+    business_domain: housing
+    permission: read
     input_fields:
       - house_id
     output_fields:
@@ -70,6 +88,9 @@ tools:
     future_extension_notes: Add richer nested fields and permission-aware projections.
   - name: update_house_name
     description: Change the name of one house. Use this only when the user explicitly asks to rename a house.
+    tags: [house, write, rename]
+    business_domain: housing
+    permission: write
     input_fields:
       - house_id
       - new_name
@@ -83,6 +104,9 @@ tools:
     future_extension_notes: Add audit logging, validation rules, and transactional persistence.
   - name: update_house_price
     description: Change the price of one house. Use this only when the user explicitly asks to update a house price.
+    tags: [house, write, price]
+    business_domain: housing
+    permission: write
     input_fields:
       - house_id
       - new_price

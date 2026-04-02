@@ -5,72 +5,38 @@ from __future__ import annotations
 from textwrap import dedent
 
 
-def intent_classification_prompt(user_input: str) -> str:
-    """Prompt for intent classification."""
+def plan_action_prompt(user_input: str, candidate_tools_text: str) -> str:
+    """Prompt for the single structured planning call.
+
+    This prompt is intentionally compact because planner latency matters.
+    The output contract is aligned with `PlannerOutput` for future SFT/RL data.
+    """
     return dedent(
         f"""
-        Classify the user request into one of these labels:
-        - tool_lookup: the user is asking what tools exist or how a tool works
-        - read: the user is asking to fetch or inspect data
-        - write: the user is asking to change data
-        - general: the user is asking for explanation or chat with no tool needed
-
-        Return strict JSON with keys:
-        - intent
-        - rationale
-
-        User request:
-        {user_input}
-        """
-    ).strip()
-
-
-def tool_planning_prompt(user_input: str, intent: str, tools_text: str) -> str:
-    """Prompt for tool planning."""
-    return dedent(
-        f"""
-        You are planning internal tool calls for a small local agent.
-
-        Available tools:
-        {tools_text}
+        You are the planning layer for a local tool-use system.
 
         User request:
         {user_input}
 
-        Intent:
-        {intent}
+        Candidate tools:
+        {candidate_tools_text}
 
-        Return strict JSON with keys:
-        - needs_tools: boolean
-        - plan_notes: short string
-        - tool_calls: array of objects with keys tool_name, arguments, reason
+        Return exactly one JSON object with these keys:
+        - intent: one of ["tool_lookup", "read", "write", "general"]
+        - selected_tools: array of tool names
+        - tool_calls: array of objects with keys tool_name and arguments
+        - confidence: number between 0 and 1
+        - risk_level: one of ["low", "medium", "high"]
+        - need_confirmation: boolean
+        - clarification_needed: boolean
+        - clarification_question: string
+        - direct_answer: string
 
         Rules:
-        - Only choose write tools if the user explicitly asked for a change.
-        - If no tool is needed, return an empty tool_calls array.
-        - Keep arguments simple and explicit.
-        """
-    ).strip()
-
-
-def final_answer_prompt(user_input: str, tool_results_text: str, review_notes: list[str]) -> str:
-    """Prompt for answer synthesis."""
-    joined_notes = "\n".join(f"- {note}" for note in review_notes) or "- No review notes."
-    return dedent(
-        f"""
-        Write a concise final answer for the user.
-
-        User request:
-        {user_input}
-
-        Tool results:
-        {tool_results_text}
-
-        Review notes:
-        {joined_notes}
-
-        Rules:
-        - Clearly say when data is mock data.
-        - Be direct and short.
+        - Prefer zero or one tool call unless multiple tools are clearly required.
+        - Only choose write tools if the user explicitly asked to change data.
+        - If the request is ambiguous, set clarification_needed=true and ask one concise question.
+        - If no tool is needed, keep tool_calls empty and fill direct_answer.
+        - Output valid JSON only. No markdown, no prose, no code fences.
         """
     ).strip()

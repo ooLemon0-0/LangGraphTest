@@ -9,40 +9,59 @@ from langgraph.graph import END, START, StateGraph
 from app.common.settings import AppSettings
 from app.graph.nodes import (
     GraphDependencies,
-    classify_intent,
+    approval_step,
     execute_tools,
-    finalize,
+    fetch_tools,
     normalize_input,
-    plan_tool_calls,
-    review_results,
+    plan_action,
+    render_response,
+    retrieve_candidate_tools_node,
+    validate_and_authorize,
 )
-from app.graph.router import should_execute_tools
+from app.graph.router import route_after_approval, route_after_validation
 from app.graph.state import GraphState
+
+try:
+    from langgraph.checkpoint.memory import MemorySaver
+except ImportError:  # pragma: no cover - version compatibility shim
+    from langgraph.checkpoint.memory import InMemorySaver as MemorySaver
 
 
 def build_graph(settings: AppSettings):
     """Construct and compile the LangGraph workflow."""
     deps = GraphDependencies(settings)
     workflow = StateGraph(GraphState)
-    workflow.add_node("normalize_input", partial(normalize_input, _=deps))
-    workflow.add_node("classify_intent", partial(classify_intent, deps=deps))
-    workflow.add_node("plan_tool_calls", partial(plan_tool_calls, deps=deps))
+    workflow.add_node("normalize_input", partial(normalize_input, deps=deps))
+    workflow.add_node("fetch_tools", partial(fetch_tools, deps=deps))
+    workflow.add_node("retrieve_candidate_tools", partial(retrieve_candidate_tools_node, deps=deps))
+    workflow.add_node("plan_action", partial(plan_action, deps=deps))
+    workflow.add_node("validate_and_authorize", partial(validate_and_authorize, deps=deps))
+    workflow.add_node("approval_step", partial(approval_step, deps=deps))
     workflow.add_node("execute_tools", partial(execute_tools, deps=deps))
-    workflow.add_node("review_results", partial(review_results, _=deps))
-    workflow.add_node("finalize", partial(finalize, deps=deps))
+    workflow.add_node("render_response", partial(render_response, deps=deps))
 
     workflow.add_edge(START, "normalize_input")
-    workflow.add_edge("normalize_input", "classify_intent")
-    workflow.add_edge("classify_intent", "plan_tool_calls")
+    workflow.add_edge("normalize_input", "fetch_tools")
+    workflow.add_edge("fetch_tools", "retrieve_candidate_tools")
+    workflow.add_edge("retrieve_candidate_tools", "plan_action")
+    workflow.add_edge("plan_action", "validate_and_authorize")
     workflow.add_conditional_edges(
-        "plan_tool_calls",
-        should_execute_tools,
+        "validate_and_authorize",
+        route_after_validation,
         {
+            "approval_step": "approval_step",
             "execute_tools": "execute_tools",
-            "review_results": "review_results",
+            "render_response": "render_response",
         },
     )
-    workflow.add_edge("execute_tools", "review_results")
-    workflow.add_edge("review_results", "finalize")
-    workflow.add_edge("finalize", END)
-    return workflow.compile()
+    workflow.add_conditional_edges(
+        "approval_step",
+        route_after_approval,
+        {
+            "execute_tools": "execute_tools",
+            "render_response": "render_response",
+        },
+    )
+    workflow.add_edge("execute_tools", "render_response")
+    workflow.add_edge("render_response", END)
+    return workflow.compile(checkpointer=MemorySaver())

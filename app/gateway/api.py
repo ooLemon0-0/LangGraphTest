@@ -7,6 +7,7 @@ from typing import Any
 
 import httpx
 from fastapi import APIRouter, HTTPException
+from langgraph.types import Command
 
 from app.common.schemas import ChatRequest, ChatResponse, HealthResponse
 from app.common.settings import AppSettings
@@ -50,15 +51,23 @@ def create_router(settings: AppSettings) -> APIRouter:
         initial_state = {
             "trace_id": request.trace_id,
             "messages": request.messages,
+            "metadata": request.metadata,
         }
-        result = await graph.ainvoke(initial_state)
+        config = {"configurable": {"thread_id": request.trace_id}}
+        graph_input: dict[str, Any] | Command = initial_state
+        if "resume" in request.metadata:
+            graph_input = Command(resume=request.metadata["resume"])
+        result = await graph.ainvoke(graph_input, config=config)
         serializable_state = _serialize_state(result)
         traces.put(request.trace_id, serializable_state)
+        answer = result.get("final_answer", "")
+        if not answer and serializable_state.get("__interrupt__"):
+            answer = "Confirmation is required before executing this write action."
         return ChatResponse(
             trace_id=request.trace_id,
-            answer=result.get("final_answer", ""),
+            answer=answer,
             tool_calls=result.get("tool_plan", []),
-            review_notes=result.get("review_notes", []),
+            review_notes=result.get("response_notes", []),
             raw_state=serializable_state,
         )
 
@@ -87,6 +96,12 @@ def _serialize_state(state: dict[str, Any]) -> dict[str, Any]:
     """Convert graph state into JSON-friendly data."""
     serialized: dict[str, Any] = {}
     for key, value in state.items():
+        if key == "__interrupt__":
+            serialized[key] = [
+                item.value if hasattr(item, "value") else item
+                for item in value
+            ]
+            continue
         if isinstance(value, list):
             serialized[key] = [item.model_dump() if hasattr(item, "model_dump") else item for item in value]
             continue

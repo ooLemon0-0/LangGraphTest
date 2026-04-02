@@ -39,6 +39,7 @@ class ChatCompletionRequest(BaseModel):
     temperature: float = 0.1
     max_tokens: int = 512
     response_format: dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class ModelRuntime:
@@ -89,13 +90,19 @@ class ModelRuntime:
             return local_model_dir
         return configured_source
 
-    def generate(self, messages: list[ChatCompletionMessage], temperature: float, max_tokens: int) -> str:
+    def generate(
+        self,
+        messages: list[ChatCompletionMessage],
+        temperature: float,
+        max_tokens: int,
+        response_format: dict[str, Any] | None = None,
+    ) -> str:
         """Generate one assistant message from chat input."""
         self.load()
         assert self.model is not None
         assert self.tokenizer is not None
 
-        prompt = self._build_prompt(messages)
+        prompt = self._build_prompt(messages, response_format=response_format)
         encoded = self.tokenizer(prompt, return_tensors="pt")
         encoded = {key: value.to(self.device) for key, value in encoded.items()}
 
@@ -115,10 +122,22 @@ class ModelRuntime:
         new_tokens = output[0][prompt_tokens:]
         return self.tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
 
-    def _build_prompt(self, messages: list[ChatCompletionMessage]) -> str:
+    def _build_prompt(
+        self,
+        messages: list[ChatCompletionMessage],
+        response_format: dict[str, Any] | None = None,
+    ) -> str:
         """Build a model-ready prompt from chat messages."""
         assert self.tokenizer is not None
         prompt_messages = [{"role": item.role, "content": item.content} for item in messages]
+        if response_format and response_format.get("type") == "json_object":
+            prompt_messages.insert(
+                0,
+                {
+                    "role": "system",
+                    "content": "Return exactly one valid JSON object. No markdown. No extra text.",
+                },
+            )
         if hasattr(self.tokenizer, "apply_chat_template"):
             return self.tokenizer.apply_chat_template(
                 prompt_messages,
@@ -176,10 +195,22 @@ async def health() -> HealthResponse:
 @app.post("/v1/chat/completions")
 async def chat_completions(request: ChatCompletionRequest) -> dict[str, Any]:
     """Serve a minimal OpenAI-compatible chat completion response."""
+    started = time.time()
+    purpose = (request.metadata or {}).get("purpose", "chat")
     content = runtime.generate(
         messages=request.messages,
         temperature=request.temperature,
         max_tokens=request.max_tokens,
+        response_format=request.response_format,
+    )
+    elapsed = time.time() - started
+    logger.info(
+        "Chat completion finished purpose=%s max_tokens=%s temperature=%s latency=%.3fs structured=%s",
+        purpose,
+        request.max_tokens,
+        request.temperature,
+        elapsed,
+        bool(request.response_format),
     )
     created = int(started_at)
     return {
