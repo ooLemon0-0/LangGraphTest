@@ -1,4 +1,9 @@
-"""Deterministic validation and authorization helpers for tool execution."""
+"""Deterministic validation helpers for tool execution.
+
+Validation is always part of the main path.
+Approval is only triggered later when validation determines a request
+matches a confirmation policy such as a high-risk write.
+"""
 
 from __future__ import annotations
 
@@ -10,13 +15,17 @@ from app.graph.planner_models import PlannerOutput, ValidatedPlan
 from app.mcp_server.tool_schemas import TOOL_INPUT_MODELS
 
 
-def validate_and_authorize_plan(
+def validate_plan(
     planner_output: PlannerOutput,
     candidate_tools: list[dict[str, Any]],
     *,
     user_role: str = "user",
 ) -> ValidatedPlan:
-    """Validate tool calls against manifest metadata and input schemas."""
+    """Validate tool calls and derive policy decisions for later routing.
+
+    This function does not perform interactive approval itself. It only
+    determines whether approval is required and returns a validated plan.
+    """
     notes: list[str] = []
     preview: list[dict[str, Any]] = []
     candidate_index = {tool["name"]: tool for tool in candidate_tools}

@@ -6,7 +6,13 @@ from app.graph.state import GraphState
 
 
 def route_after_validation(state: GraphState) -> str:
-    """Choose the next edge after deterministic validation."""
+    """Choose the next edge after deterministic validation.
+
+    Main-path semantics:
+    - clarification or done-without-tool => render_response
+    - approval policy hit => approval_step
+    - otherwise, validated low-risk / safe tool call => execute_tools
+    """
     if state.get("clarification_needed"):
         return "render_response"
     if state.get("need_confirmation"):

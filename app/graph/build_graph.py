@@ -20,7 +20,7 @@ from app.graph.nodes import (
     plan_action,
     render_response,
     retrieve_candidate_tools_node,
-    validate_and_authorize,
+    validate_action,
 )
 from app.graph.router import route_after_approval, route_after_validation
 from app.graph.router import route_after_execution
@@ -52,7 +52,7 @@ def build_graph(settings: AppSettings):
     workflow.add_node("fetch_tools", partial(fetch_tools, deps=deps))
     workflow.add_node("retrieve_candidate_tools", partial(retrieve_candidate_tools_node, deps=deps))
     workflow.add_node("plan_action", partial(plan_action, deps=deps))
-    workflow.add_node("validate_and_authorize", partial(validate_and_authorize, deps=deps))
+    workflow.add_node("validate_action", partial(validate_action, deps=deps))
     workflow.add_node("approval_step", partial(approval_step, deps=deps))
     workflow.add_node("execute_tools", partial(execute_tools, deps=deps))
     workflow.add_node("render_response", partial(render_response, deps=deps))
@@ -61,9 +61,9 @@ def build_graph(settings: AppSettings):
     workflow.add_edge("normalize_input", "fetch_tools")
     workflow.add_edge("fetch_tools", "retrieve_candidate_tools")
     workflow.add_edge("retrieve_candidate_tools", "plan_action")
-    workflow.add_edge("plan_action", "validate_and_authorize")
+    workflow.add_edge("plan_action", "validate_action")
     workflow.add_conditional_edges(
-        "validate_and_authorize",
+        "validate_action",
         route_after_validation,
         {
             "approval_step": "approval_step",

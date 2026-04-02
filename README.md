@@ -14,7 +14,7 @@
 - 每轮请求都会向 MCP 拉取一次 `/tools`
 - 使用候选工具检索，而不是把全量工具直接塞给 planner
 - 默认每轮只做 1 次主 LLM 调用，用于“下一步动作规划”
-- 工具执行前有确定性的校验与授权逻辑
+- 工具执行前有确定性的校验与策略判断逻辑
 - 高风险写操作支持确认中断与恢复
 - 输出层默认模板化，优先直接回答业务结果
 - 内置统一 mock store，房源列表和房源详情保持一致
@@ -75,7 +75,7 @@ graph TD
     B --> C["拉取工具清单 / fetch_tools"]
     C --> D["候选工具检索 / retrieve_candidate_tools"]
     D --> E["规划下一步动作 / plan_action"]
-    E --> F["校验与授权 / validate_and_authorize"]
+    E --> F["校验与策略判断 / validate_action"]
 
     F -->|"需要确认 / need_confirmation"| G["确认步骤 / approval_step"]
     F -->|"存在下一步工具 / has next tool"| H["执行工具 / execute_tools"]
@@ -126,10 +126,10 @@ graph TD
   - `done`
 - 如果结构化解析失败，会显式标记 fallback，并进入确定性兜底规划
 
-#### `validate_and_authorize`
+#### `validate_action`
 
 - 不调用 LLM
-- 执行确定性安全校验：
+- 默认必经步骤，执行确定性安全校验与策略判断：
   - 工具是否存在
   - 参数 schema 校验
   - 必填参数检查
@@ -137,11 +137,17 @@ graph TD
   - 权限/角色检查
   - 读写分类
   - 风险等级评估
-  - 是否需要确认
+- 输出是否需要确认、是否需要澄清、是否可以直接执行
+
+这里的关键语义是：
+
+- `validate` 始终执行
+- `approval` 不是默认主干，只在命中高风险写操作或敏感策略时才触发
+- 低风险 read / safe action 会在 `validate_action` 通过后直接进入 `execute_tools`
 
 #### `approval_step`
 
-- 用于高风险写操作确认
+- 仅用于命中确认策略的请求，例如高风险写操作
 - 返回待确认状态和预览内容
 - 支持通过同一 `trace_id` 恢复继续执行
 
@@ -177,6 +183,7 @@ normalize_input
 - 删除了默认 `review_results`
 - 删除了默认二次 `finalize` 总结
 - 改为每轮“规划一步 -> 执行一步 -> 再规划”
+- 将“默认校验”与“按策略触发确认”拆开表达
 - 默认路径优先减少串行 LLM 调用
 
 这能明显减少无效 LLM 开销，同时保留多跳工具调用能力。

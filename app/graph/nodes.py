@@ -16,7 +16,7 @@ from app.graph.planner_models import ApprovalPayload, PlannerOutput, PlannerTrac
 from app.graph.prompts import plan_action_prompt
 from app.graph.state import GraphState
 from app.graph.tool_retrieval import retrieve_candidate_tools
-from app.graph.validation import validate_and_authorize_plan
+from app.graph.validation import validate_plan
 from app.llm_client.openai_compatible import OpenAICompatibleClient
 
 try:
@@ -393,11 +393,15 @@ def heuristic_planner_output_multi_step(
     return heuristic_planner_output(user_input=user_input, candidate_tools=candidate_tools)
 
 
-async def validate_and_authorize(state: GraphState, deps: GraphDependencies) -> GraphState:
-    """Validate planned tool calls and enforce deterministic safety checks."""
+async def validate_action(state: GraphState, deps: GraphDependencies) -> GraphState:
+    """Validate planned tool calls and derive whether approval is needed.
+
+    Validation is always on the main path. Approval is a later branch that is
+    only entered when the validated plan requires explicit confirmation.
+    """
     _ = deps
     planner_output = PlannerOutput.model_validate(state.get("planner_output", {}))
-    validated = validate_and_authorize_plan(
+    validated = validate_plan(
         planner_output=planner_output,
         candidate_tools=state.get("candidate_tools", []),
         user_role=str(state.get("metadata", {}).get("user_role", "user")),
@@ -406,7 +410,7 @@ async def validate_and_authorize(state: GraphState, deps: GraphDependencies) -> 
     planner_iterations = list(state.get("planner_iterations", []))
     execution_trace.append(
         {
-            "step": "validate_and_authorize",
+            "step": "validate_action",
             "validated_tool_calls": len(validated.tool_calls),
             "risk_level": validated.risk_level,
             "need_confirmation": validated.need_confirmation,
