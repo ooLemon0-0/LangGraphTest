@@ -9,6 +9,7 @@ PYTORCH_VERSION="${PYTORCH_VERSION:-2.8.0}"
 TORCHVISION_VERSION="${TORCHVISION_VERSION:-0.23.0}"
 TORCHAUDIO_VERSION="${TORCHAUDIO_VERSION:-2.8.0}"
 PYTORCH_CUDA_VERSION="${PYTORCH_CUDA_VERSION:-12.8}"
+PYTORCH_WHEEL_INDEX_URL="${PYTORCH_WHEEL_INDEX_URL:-https://download.pytorch.org/whl/cu128}"
 
 log() {
   echo "[bootstrap] $*"
@@ -68,16 +69,16 @@ print(f"[bootstrap] torch.cuda.device_count()={torch.cuda.device_count()}")
 PY
 }
 
-install_conda_gpu_torch() {
-  log "Installing CUDA-enabled PyTorch with conda into ${ENV_NAME}"
-  log "Command: conda install -n ${ENV_NAME} -y pytorch=${PYTORCH_VERSION} torchvision=${TORCHVISION_VERSION} torchaudio=${TORCHAUDIO_VERSION} pytorch-cuda=${PYTORCH_CUDA_VERSION} -c ${PYTORCH_CHANNEL} -c ${NVIDIA_CHANNEL}"
-  conda install -n "$ENV_NAME" -y \
-    "pytorch=${PYTORCH_VERSION}" \
-    "torchvision=${TORCHVISION_VERSION}" \
-    "torchaudio=${TORCHAUDIO_VERSION}" \
-    "pytorch-cuda=${PYTORCH_CUDA_VERSION}" \
-    -c "$PYTORCH_CHANNEL" \
-    -c "$NVIDIA_CHANNEL"
+install_pip_gpu_torch() {
+  log "Installing CUDA-enabled PyTorch wheel into conda env ${ENV_NAME}"
+  log "Torch target versions: torch=${PYTORCH_VERSION}, torchvision=${TORCHVISION_VERSION}, torchaudio=${TORCHAUDIO_VERSION}, cuda=${PYTORCH_CUDA_VERSION}"
+  log "PyTorch wheel index-url: ${PYTORCH_WHEEL_INDEX_URL}"
+  log "Command: conda run --no-capture-output -n ${ENV_NAME} python -m pip install --upgrade torch==${PYTORCH_VERSION} torchvision==${TORCHVISION_VERSION} torchaudio==${TORCHAUDIO_VERSION} --index-url ${PYTORCH_WHEEL_INDEX_URL}"
+  conda run --no-capture-output -n "$ENV_NAME" python -m pip install --upgrade \
+    "torch==${PYTORCH_VERSION}" \
+    "torchvision==${TORCHVISION_VERSION}" \
+    "torchaudio==${TORCHAUDIO_VERSION}" \
+    --index-url "$PYTORCH_WHEEL_INDEX_URL"
 }
 
 ensure_gpu_runtime() {
@@ -91,12 +92,13 @@ ensure_gpu_runtime() {
     return
   fi
 
-  log "Linux + NVIDIA detected. PyTorch install mode: conda"
+  log "Linux + NVIDIA detected. PyTorch install mode: pip wheel inside target conda env"
+  log "Target conda env: ${ENV_NAME}"
   print_torch_state "before cleanup"
   remove_pip_torch_packages
   remove_conda_torch_packages
-  install_conda_gpu_torch
-  print_torch_state "after conda install"
+  install_pip_gpu_torch
+  print_torch_state "after pip wheel install"
 }
 
 ensure_conda_available
