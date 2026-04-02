@@ -19,3 +19,10 @@ def route_after_validation(state: GraphState) -> str:
 def route_after_approval(state: GraphState) -> str:
     """Choose the next edge after approval / interrupt resume."""
     return "execute_tools" if state.get("approval_status") == "approved" else "render_response"
+
+
+def route_after_execution(state: GraphState) -> str:
+    """Choose whether to continue looping after a tool result."""
+    if state.get("iteration_count", 0) >= state.get("max_iterations", 4):
+        return "render_response"
+    return "fetch_tools"

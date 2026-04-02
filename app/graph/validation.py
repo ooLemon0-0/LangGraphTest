@@ -32,6 +32,7 @@ def validate_and_authorize_plan(
             clarification_needed=True,
             clarification_question=planner_output.clarification_question,
             direct_answer=planner_output.direct_answer,
+            done=planner_output.done,
             notes=["Planner requested clarification before tool execution."],
         )
 
@@ -96,6 +97,7 @@ def validate_and_authorize_plan(
         clarification_needed=planner_output.clarification_needed,
         clarification_question=planner_output.clarification_question,
         direct_answer=direct_answer,
+        done=planner_output.done,
         notes=notes,
         preview=preview,
         dry_run_supported=False,
@@ -119,4 +121,3 @@ def max_risk(left: str, right: str) -> str:
     """Return the higher of two coarse risk levels."""
     order = {"low": 0, "medium": 1, "high": 2}
     return left if order.get(left, 0) >= order.get(right, 0) else right
-

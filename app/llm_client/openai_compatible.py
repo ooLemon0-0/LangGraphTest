@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import logging
 import re
@@ -20,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 class OpenAICompatibleClient:
-    """Minimal async client for OpenAI-compatible chat completions."""
+    """Minimal async client for a local OpenAI-compatible chat API."""
 
     def __init__(self, settings: LLMSettings) -> None:
         self.settings = settings
@@ -33,7 +34,7 @@ class OpenAICompatibleClient:
         response_format: dict[str, Any] | None = None,
         purpose: str = "chat",
     ) -> str:
-        """Send a chat completion request and return text content."""
+        """Send one chat completion request and return the assistant text."""
         payload: dict[str, Any] = {
             "model": self.settings.model_name,
             "messages": [message.model_dump() for message in messages],
@@ -69,7 +70,7 @@ class OpenAICompatibleClient:
         return body["choices"][0]["message"]["content"]
 
     async def chat_json(self, messages: list[ChatMessage]) -> dict[str, Any]:
-        """Request JSON output and parse it with a safe fallback."""
+        """Request JSON output and parse it."""
         content = await self.chat(
             messages=messages,
             response_format={"type": "json_object"},
@@ -86,7 +87,12 @@ class OpenAICompatibleClient:
         max_tokens: int,
         temperature: float,
     ) -> tuple[BaseModel, PlannerTrace]:
-        """Request structured output with extraction, validation, and one repair attempt."""
+        """Request structured output with extraction, validation, and one repair pass.
+
+        This layer is intentionally explicit and local. It is a temporary
+        stabilization step until we have enough planner traces to support
+        provider-native structured outputs or SFT on the planner format.
+        """
         raw_output = await self.chat(
             messages=messages,
             response_format={"type": "json_object"},
@@ -96,20 +102,20 @@ class OpenAICompatibleClient:
         )
         started = perf_counter()
         parsed = self._parse_structured_output(raw_output, schema)
-        latency_seconds = perf_counter() - started
+        parse_latency = perf_counter() - started
         if parsed is not None:
             return parsed, PlannerTrace(
                 purpose=purpose,
                 max_tokens=max_tokens,
                 temperature=temperature,
-                latency_seconds=latency_seconds,
+                latency_seconds=parse_latency,
                 parsed_ok=True,
                 raw_output=raw_output,
             )
 
         repair_prompt = (
-            "Repair this into a valid JSON object matching the required schema. "
-            "Return JSON only.\n\n"
+            "请把下面内容修复为一个合法 JSON 对象，且必须满足既定 schema。"
+            "只能输出 JSON，不要输出解释。\n\n"
             + raw_output
         )
         repair_output = await self.chat(
@@ -121,12 +127,12 @@ class OpenAICompatibleClient:
         )
         repaired = self._parse_structured_output(repair_output, schema)
         if repaired is None:
-            raise ValueError(f"Unable to parse structured output for {purpose}")
+            raise ValueError(f"Unable to parse structured output for {purpose}. raw={raw_output!r} repair={repair_output!r}")
         return repaired, PlannerTrace(
             purpose=purpose,
             max_tokens=max_tokens,
             temperature=temperature,
-            latency_seconds=latency_seconds,
+            latency_seconds=parse_latency,
             parsed_ok=True,
             repaired=True,
             raw_output=raw_output,
@@ -134,23 +140,57 @@ class OpenAICompatibleClient:
         )
 
     def _parse_structured_output(self, raw_output: str, schema: type[BaseModel]) -> BaseModel | None:
-        """Parse strict or extracted JSON into the requested schema."""
-        candidates = [raw_output]
-        extracted = extract_json_object(raw_output)
-        if extracted and extracted != raw_output:
-            candidates.append(extracted)
-
-        for candidate in candidates:
+        """Parse model output into the requested schema."""
+        for candidate in candidate_json_strings(raw_output):
             try:
                 return schema.model_validate_json(candidate)
-            except ValidationError:
-                continue
-            except json.JSONDecodeError:
-                continue
+            except (ValidationError, json.JSONDecodeError):
+                pass
+
+            python_dict = try_parse_python_dict(candidate)
+            if python_dict is not None:
+                try:
+                    return schema.model_validate(python_dict)
+                except ValidationError:
+                    continue
         return None
 
 
+def candidate_json_strings(text: str) -> list[str]:
+    """Generate progressively cleaned JSON candidates from raw model output."""
+    cleaned = text.strip()
+    fenced = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.IGNORECASE | re.DOTALL).strip()
+    extracted = extract_json_object(fenced)
+    variants = [cleaned, fenced, extracted]
+    normalized_variants: list[str] = []
+    for item in variants:
+        if not item:
+            continue
+        normalized_variants.append(item)
+        normalized_variants.append(
+            item.replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'")
+        )
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in normalized_variants:
+        if item in seen:
+            continue
+        seen.add(item)
+        deduped.append(item)
+    return deduped
+
+
 def extract_json_object(text: str) -> str:
-    """Extract the first top-level JSON object from text."""
+    """Extract the first JSON object-looking substring."""
     match = re.search(r"\{.*\}", text, re.DOTALL)
     return match.group(0) if match else text
+
+
+def try_parse_python_dict(text: str) -> dict[str, Any] | None:
+    """Parse Python-like dict syntax as a last local fallback."""
+    try:
+        value = ast.literal_eval(text)
+    except (ValueError, SyntaxError):
+        return None
+    return value if isinstance(value, dict) else None

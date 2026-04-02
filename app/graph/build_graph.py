@@ -23,6 +23,7 @@ from app.graph.nodes import (
     validate_and_authorize,
 )
 from app.graph.router import route_after_approval, route_after_validation
+from app.graph.router import route_after_execution
 from app.graph.state import GraphState
 from app.mcp_server.tool_schemas import ToolManifest
 
@@ -78,6 +79,13 @@ def build_graph(settings: AppSettings):
             "render_response": "render_response",
         },
     )
-    workflow.add_edge("execute_tools", "render_response")
+    workflow.add_conditional_edges(
+        "execute_tools",
+        route_after_execution,
+        {
+            "fetch_tools": "fetch_tools",
+            "render_response": "render_response",
+        },
+    )
     workflow.add_edge("render_response", END)
     return workflow.compile(checkpointer=MemorySaver())

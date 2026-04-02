@@ -30,6 +30,7 @@ class PlannerOutput(BaseModel):
     clarification_needed: bool = False
     clarification_question: str = ""
     direct_answer: str = ""
+    done: bool = False
 
 
 class PlannerTrace(BaseModel):
@@ -68,7 +69,7 @@ class ValidatedPlan(BaseModel):
     clarification_needed: bool = False
     clarification_question: str = ""
     direct_answer: str = ""
+    done: bool = False
     notes: list[str] = Field(default_factory=list)
     preview: list[dict[str, Any]] = Field(default_factory=list)
     dry_run_supported: bool = False
-

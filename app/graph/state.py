@@ -27,6 +27,9 @@ class GraphState(TypedDict, total=False):
     planner_trace: dict[str, Any]
     validated_plan: dict[str, Any]
     execution_trace: list[dict[str, Any]]
+    completed_tool_calls: list[dict[str, Any]]
+    iteration_count: int
+    max_iterations: int
 
     intent: Literal["tool_lookup", "read", "write", "general"]
     tool_plan: list[dict[str, Any]]
