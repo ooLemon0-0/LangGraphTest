@@ -37,6 +37,7 @@ MODEL_RUNTIME_PACKAGES = [
     "accelerate>=0.34,<1.0",
     "huggingface_hub>=0.30,<1.0",
 ]
+TRANSFORMERS_MAIN_PACKAGE = "git+https://github.com/huggingface/transformers.git"
 
 
 def parse_args() -> argparse.Namespace:
@@ -238,12 +239,13 @@ def print_torch_runtime_snapshot(stage: str) -> None:
     log(f"torch module path: {Path(torch.__file__).resolve()}")
 
 
-def install_packages(force: bool, backend: str) -> None:
+def install_packages(force: bool, backend: str, config: dict[str, str]) -> None:
     """Install project dependencies in the current interpreter environment."""
     print_torch_runtime_snapshot(stage="before pip installs")
     run_pip_install("pip", description="Upgrading pip", upgrade=True)
     install_python_requirements(force=force)
-    install_model_runtime_packages(force=force)
+    install_model_runtime_packages(force=force, config=config)
+    print_runtime_package_versions()
 
     if backend == "vllm":
         run_pip_install("vllm", description="Installing optional vLLM backend", upgrade=force)
@@ -260,7 +262,7 @@ def install_python_requirements(force: bool) -> None:
         filtered_requirements.unlink(missing_ok=True)
 
 
-def install_model_runtime_packages(force: bool) -> None:
+def install_model_runtime_packages(force: bool, config: dict[str, str]) -> None:
     """Install runtime packages required by the selected local model family.
 
     Keep this explicit instead of relying only on requirements.txt so model
@@ -271,8 +273,37 @@ def install_model_runtime_packages(force: bool) -> None:
     run_pip_install(
         *MODEL_RUNTIME_PACKAGES,
         description="Installing model runtime compatibility packages",
-        upgrade=True if force else False,
+        upgrade=True,
     )
+    if model_requires_transformers_main(config):
+        run_pip_install(
+            TRANSFORMERS_MAIN_PACKAGE,
+            description="Installing Transformers main branch for Qwen3.5 compatibility",
+            upgrade=True,
+        )
+
+
+def print_runtime_package_versions() -> None:
+    """Log key model runtime package versions after installation."""
+    packages = ["transformers", "tokenizers", "accelerate", "huggingface_hub"]
+    for package in packages:
+        try:
+            module = __import__(package)
+            version = getattr(module, "__version__", "<unknown>")
+            log(f"{package} version: {version}")
+        except Exception as exc:
+            log(f"{package} version check failed: {exc}")
+
+
+def model_requires_transformers_main(config: dict[str, str]) -> bool:
+    """Return True when the selected model family needs Transformers main.
+
+    Qwen3.5 model artifacts currently advertise a dev/main Transformers
+    baseline, so a stable PyPI release may still miss the `qwen3_5`
+    architecture even when it is numerically newer than the documented dev tag.
+    """
+    source = (config.get("llm.service.model_source") or "").strip().lower()
+    return "qwen3.5" in source
 
 
 def build_filtered_requirements_file() -> Path:
@@ -558,7 +589,7 @@ def main() -> None:
     print_runtime_context(backend=backend)
 
     if not args.skip_install:
-        install_packages(force=args.force, backend=backend)
+        install_packages(force=args.force, backend=backend, config=config)
 
     if not args.skip_model:
         download_model(
