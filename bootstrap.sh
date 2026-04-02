@@ -45,6 +45,45 @@ remove_pip_torch_packages() {
   conda run --no-capture-output -n "$ENV_NAME" python -m pip uninstall -y torch torchvision torchaudio >/dev/null 2>&1 || true
 }
 
+remove_torch_residuals() {
+  log "Removing residual torch package directories from conda env ${ENV_NAME} if present"
+  conda run --no-capture-output -n "$ENV_NAME" python - <<'PY'
+import shutil
+import site
+from pathlib import Path
+
+targets = [
+    "torch",
+    "torchvision",
+    "torchaudio",
+    "torchgen",
+]
+
+patterns = [
+    "torch-*.dist-info",
+    "torchvision-*.dist-info",
+    "torchaudio-*.dist-info",
+]
+
+seen = set()
+for base in [Path(path) for path in site.getsitepackages()]:
+    if not base.exists():
+        continue
+    for name in targets:
+        target = base / name
+        if target.exists() and target not in seen:
+            print(f"[bootstrap] removing residual path: {target}")
+            shutil.rmtree(target, ignore_errors=True)
+            seen.add(target)
+    for pattern in patterns:
+        for target in base.glob(pattern):
+            if target.exists() and target not in seen:
+                print(f"[bootstrap] removing residual path: {target}")
+                shutil.rmtree(target, ignore_errors=True)
+                seen.add(target)
+PY
+}
+
 remove_conda_torch_packages() {
   log "Removing existing conda PyTorch packages from conda env ${ENV_NAME} if present"
   conda remove -n "$ENV_NAME" -y pytorch torchvision torchaudio pytorch-cuda >/dev/null 2>&1 || true
@@ -63,7 +102,11 @@ print(f"[bootstrap] torch.spec={'present' if spec else 'missing'}")
 if spec is None:
     raise SystemExit(0)
 
-import torch
+try:
+    import torch
+except Exception as exc:
+    print(f"[bootstrap] torch import failed: {exc}")
+    raise SystemExit(0)
 
 print(f"[bootstrap] torch.__version__={torch.__version__}")
 print(f"[bootstrap] torch.version.cuda={torch.version.cuda}")
@@ -99,6 +142,7 @@ ensure_gpu_runtime() {
   log "Target conda env: ${ENV_NAME}"
   print_torch_state "before cleanup"
   remove_pip_torch_packages
+  remove_torch_residuals
   remove_conda_torch_packages
   install_pip_gpu_torch
   print_torch_state "after pip wheel install"
