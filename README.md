@@ -1,30 +1,23 @@
 # Local LangGraph Tool-Use Service
 
-这是一个本地运行的 LangGraph 工具调用示例项目。它把一个完整的 Agent 执行链拆成三个独立服务：
+这是一个本地运行的 LangGraph tool-use 示例项目。它把完整的工具调用链拆成 3 个独立服务：
 
-- `LLM Server`：提供本地 OpenAI-compatible 大模型接口
+- `Gateway`：对外提供 `/v1/chat`，负责运行 LangGraph
+- `LLM Server`：提供本地 OpenAI-compatible 推理接口
 - `MCP Server`：提供工具清单和工具调用入口
-- `Gateway`：承接外部请求，驱动 LangGraph 完成意图识别、工具规划、工具执行和结果整理
 
-这个仓库目前更偏向“可运行骨架”而不是完整业务系统：核心链路已经打通，房源和经纪人工具也已经抽象出来，但大部分工具返回的还是 mock 数据，方便后续替换成真实数据库、CRM 或内部服务。
+当前版本的重点不是“聊天”，而是让用户通过自然语言安全地调用后台工具，尤其是读写类业务工具。项目已经重构为“多轮规划 -> 执行一步 -> 观察结果 -> 再规划”的循环式 LangGraph，并保留了后续做 tool retrieval、SFT、RL 的扩展位。
 
-## 项目目标
+## 当前能力概览
 
-这个项目主要用来验证一条本地 Agent 工作流：
-
-1. 用户发送自然语言请求
-2. LangGraph 判断这是不是查工具、读数据、改数据，还是普通问答
-3. 如果需要工具，先从 MCP 工具清单里选择合适工具并组织参数
-4. 调用 MCP Server 执行工具
-5. 对结果做简单审查
-6. 由 LLM 生成最终回答
-
-从设计上看，它适合做这些事情：
-
-- 本地验证 LangGraph + Tool Use 的整体链路
-- 演示“模型决策”和“工具执行”解耦的架构
-- 给后续真实业务 Agent 提供最小可扩展脚手架
-- 快速替换 mock 工具为真实业务实现
+- 保留 3 进程架构：`gateway` / `llm_server` / `mcp_server`
+- 每轮请求都会向 MCP 拉取一次 `/tools`
+- 使用候选工具检索，而不是把全量工具直接塞给 planner
+- 默认每轮只做 1 次主 LLM 调用，用于“下一步动作规划”
+- 工具执行前有确定性的校验与授权逻辑
+- 高风险写操作支持确认中断与恢复
+- 输出层默认模板化，优先直接回答业务结果
+- 内置统一 mock store，房源列表和房源详情保持一致
 
 ## 整体架构
 
@@ -32,20 +25,12 @@
 User / Client
     |
     v
-Gateway (FastAPI)
+Gateway (FastAPI, LangGraph)
+    | \
+    |  \
+    |   +--> MCP Server (/tools, /invoke)
     |
-    v
-LangGraph Workflow
-    |                    \
-    |                     \ 
-    v                      v
-Local LLM Server        MCP Server
-                              |
-                              v
-                         Tool Registry
-                              |
-                              v
-                     Mock tools / Real business tools
+    +------> LLM Server (/v1/chat/completions)
 ```
 
 默认端口：
@@ -59,201 +44,209 @@ Local LLM Server        MCP Server
 ```text
 .
 ├─ app/
-│  ├─ common/        # 公共配置、日志、跨服务 schema
-│  ├─ gateway/       # 对外 API，负责调用 LangGraph
-│  ├─ graph/         # LangGraph 状态、节点、路由、提示词
-│  ├─ llm_client/    # 对 OpenAI-compatible LLM 的客户端封装
+│  ├─ common/        # 配置、日志、公共 schema
+│  ├─ gateway/       # 对外 API、trace 存储、LangGraph 入口
+│  ├─ graph/         # LangGraph 状态、节点、路由、planner schema、retrieval
+│  ├─ llm_client/    # OpenAI-compatible LLM 客户端
 │  ├─ llm_server/    # 本地模型服务
-│  └─ mcp_server/    # 工具服务、工具注册表、工具实现
+│  └─ mcp_server/    # MCP 工具服务、工具 registry、mock tools
 ├─ config/
-│  ├─ config.yaml    # 项目主配置
-│  └─ tools.yaml     # MCP 工具清单
+│  ├─ config.yaml    # 主配置
+│  └─ tools.yaml     # 工具清单与工具元数据
 ├─ logs/             # 运行日志
-├─ models/           # 本地模型缓存
-├─ scripts/          # 分服务启动脚本
-├─ init.py           # 安装依赖并下载模型
-├─ start.py          # 启动 LLM / MCP / Gateway 三个服务
-├─ bootstrap.*       # 按平台初始化运行环境
-└─ start.*           # 按平台启动项目
+├─ models/           # 模型与 embedding 缓存
+├─ init.py           # 初始化依赖、下载主模型和 embedding 模型
+├─ bootstrap.sh      # Linux 初始化脚本
+├─ bootstrap.bat     # Windows 初始化脚本
+├─ start.py          # 启动 3 个服务
+├─ start.sh
+└─ start.bat
 ```
 
-## 核心模块说明
+## LangGraph 结构
 
-### 1. Gateway
+当前 LangGraph 已经不是旧版的“静态工具列表一次性规划”，而是循环式的多步执行图。
 
-`app/gateway/` 是项目的外部入口。
+### 当前流程图
 
-主要职责：
+```mermaid
+graph TD
+    A["START"] --> B["normalize_input"]
+    B --> C["fetch_tools"]
+    C --> D["retrieve_candidate_tools"]
+    D --> E["plan_action"]
+    E --> F["validate_and_authorize"]
 
-- 提供 `/v1/chat` 接口
-- 构造 LangGraph 初始状态
-- 执行整个图
-- 保存 trace，便于调试和回放
-- 代理 `/v1/tools` 到 MCP Server
+    F -->|"need_confirmation"| G["approval_step"]
+    F -->|"has next tool"| H["execute_tools"]
+    F -->|"done / clarification / no safe action"| I["render_response"]
 
-关键文件：
+    G -->|"approved"| H
+    G -->|"rejected"| I
 
-- [app/gateway/main.py](/E:/something%20I%20can%20turn%20to/HouGarden/Tool-Use/LangGraphTest/app/gateway/main.py)
-- [app/gateway/api.py](/E:/something%20I%20can%20turn%20to/HouGarden/Tool-Use/LangGraphTest/app/gateway/api.py)
+    H -->|"continue loop"| C
+    H -->|"max iterations reached"| I
 
-### 2. LLM Server
-
-`app/llm_server/` 提供本地 OpenAI-compatible 接口，默认实现基于 `transformers` 加载本地 Hugging Face 模型。
-
-主要职责：
-
-- 启动本地模型
-- 提供 `/v1/chat/completions`
-- 给 LangGraph 节点中的分类、规划、总结阶段提供统一推理能力
-
-如果配置中把 `server_backend` 设为 `vllm`，Linux 下可以切到 vLLM；Windows 和 macOS 会自动回退到 `transformers`。
-
-关键文件：
-
-- [app/llm_server/main.py](/E:/something%20I%20can%20turn%20to/HouGarden/Tool-Use/LangGraphTest/app/llm_server/main.py)
-
-### 3. MCP Server
-
-`app/mcp_server/` 是工具层，负责把“工具定义”和“工具实现”集中管理。
-
-主要职责：
-
-- 暴露 `/tools` 返回工具清单
-- 暴露 `/invoke` 执行指定工具
-- 从 `config/tools.yaml` 加载工具元数据
-- 通过 `ToolRegistry` 把工具名绑定到 Python 函数
-
-当前工具分成三类：
-
-- 元工具：`list_tools`、`get_tool_detail`
-- 经纪人工具：`get_agent_id_by_name`、`get_houses_by_agent_id`、`get_agent_by_house_id`
-- 房源工具：`get_house_detail`、`update_house_name`、`update_house_price`
-
-当前这些工具大多返回 mock 数据，适合作为接入真实业务前的联调层。
-
-关键文件：
-
-- [app/mcp_server/main.py](/E:/something%20I%20can%20turn%20to/HouGarden/Tool-Use/LangGraphTest/app/mcp_server/main.py)
-- [app/mcp_server/registry.py](/E:/something%20I%20can%20turn%20to/HouGarden/Tool-Use/LangGraphTest/app/mcp_server/registry.py)
-- [config/tools.yaml](/E:/something%20I%20can%20turn%20to/HouGarden/Tool-Use/LangGraphTest/config/tools.yaml)
-
-## LangGraph 设计
-
-LangGraph 实现在 `app/graph/` 下，核心入口是：
-
-- [app/graph/build_graph.py](/E:/something%20I%20can%20turn%20to/HouGarden/Tool-Use/LangGraphTest/app/graph/build_graph.py)
-
-### 图中的状态
-
-图状态定义在 [app/graph/state.py](/E:/something%20I%20can%20turn%20to/HouGarden/Tool-Use/LangGraphTest/app/graph/state.py)，主要字段有：
-
-- `messages`：原始会话消息
-- `normalized_user_input`：归一化后的用户输入
-- `intent`：意图分类结果，支持 `tool_lookup` / `read` / `write` / `general`
-- `tool_plan`：模型规划出的工具调用列表
-- `tool_results`：工具执行结果
-- `review_notes`：结果审查备注
-- `final_answer`：最终返回给用户的答案
-- `trace_id`：一次调用的追踪标识
-
-### 图中的节点
-
-当前工作流节点如下：
-
-```text
-START
-  -> normalize_input
-  -> classify_intent
-  -> plan_tool_calls
-  -> [if tool_plan exists] execute_tools
-  -> review_results
-  -> finalize
-  -> END
+    I --> J["END"]
 ```
 
-各节点职责如下：
+### 各节点职责
 
 #### `normalize_input`
 
-- 提取最后一条用户消息
-- 去掉多余空白
-- 生成稳定输入，减少后续提示词波动
+- 读取用户最新输入
+- 做轻量归一化
+- 初始化循环状态、已完成工具调用、调试字段
 
-#### `classify_intent`
+#### `fetch_tools`
 
-- 用 LLM 把请求归类到四种意图
-- 同时输出简单 `rationale`
-- 如果模型调用失败，会退回到关键词启发式判断
+- 每一轮都请求 `MCP /tools`
+- 获取当前全量工具清单
+- 保留全量工具快照，方便调试和后续训练采样
 
-#### `plan_tool_calls`
+#### `retrieve_candidate_tools`
 
-- 先向 MCP Server 拉取 `/tools`
-- 把工具清单和用户请求一起交给 LLM
-- 生成 `tool_calls`
-- 如果模型规划失败，会进入简单 heuristic fallback
+- 基于当前输入、已完成调用和现有结果做候选工具检索
+- 使用本地 embedding 检索 + 词法规则召回的混合策略
+- 只把 Top-K 候选工具交给 planner
 
-这个设计有一个明显优点：LangGraph 不直接写死工具知识，而是运行时读取工具清单，因此工具层可以独立演进。
+#### `plan_action`
+
+- 每轮唯一的主 LLM 调用
+- 只规划“下一步要不要调用一个工具”
+- 输出严格结构化字段，例如：
+  - `intent`
+  - `selected_tools`
+  - `tool_calls`
+  - `confidence`
+  - `risk_level`
+  - `need_confirmation`
+  - `clarification_needed`
+  - `direct_answer`
+  - `done`
+- 如果结构化解析失败，会显式标记 fallback，并进入确定性兜底规划
+
+#### `validate_and_authorize`
+
+- 不调用 LLM
+- 执行确定性安全校验：
+  - 工具是否存在
+  - 参数 schema 校验
+  - 必填参数检查
+  - 参数标准化
+  - 权限/角色检查
+  - 读写分类
+  - 风险等级评估
+  - 是否需要确认
+
+#### `approval_step`
+
+- 用于高风险写操作确认
+- 返回待确认状态和预览内容
+- 支持通过同一 `trace_id` 恢复继续执行
 
 #### `execute_tools`
 
-- 遍历 `tool_plan`
-- 对每个工具向 MCP `/invoke` 发请求
-- 收集成功和失败结果
+- 每轮只执行一步工具调用
+- 记录已完成调用、工具结果、执行耗时
+- 执行后回到 `fetch_tools`，继续下一轮
 
-#### `review_results`
+#### `render_response`
 
-- 对工具执行结果做轻量审查
-- 当前主要标注两类信息：
-  - 是否返回 mock 数据
-  - 是否有工具执行失败
+- 默认模板化输出
+- 单工具读、单工具写、多工具聚合都优先走模板
+- 多轮查询会基于 `tool_results` 组织业务答案，而不是输出“工具执行成功日志”
+- 当前支持根据输入语言切换中文/英文模板
 
-这一步现在比较轻，但它给后续扩展留了位置，比如：
+## 与旧版结构的主要区别
 
-- 风险审查
-- 写操作确认
-- 权限校验
-- 多工具结果一致性检查
+旧版大致是：
 
-#### `finalize`
+```text
+normalize_input
+-> classify_intent
+-> plan_tool_calls
+-> execute_tools
+-> review_results
+-> finalize
+```
 
-- 把用户请求、工具结果、审查备注交给 LLM
-- 生成最终用户回答
-- 如果 LLM 不可用，会退回到简单兜底文本
+当前版本变为：
 
-### 条件路由
+- 删除了独立的 `classify_intent`
+- 删除了默认 `review_results`
+- 删除了默认二次 `finalize` 总结
+- 改为每轮“规划一步 -> 执行一步 -> 再规划”
+- 默认路径优先减少串行 LLM 调用
 
-条件路由定义在 [app/graph/router.py](/E:/something%20I%20can%20turn%20to/HouGarden/Tool-Use/LangGraphTest/app/graph/router.py)：
+这能明显减少无效 LLM 开销，同时保留多跳工具调用能力。
 
-- 如果 `tool_plan` 非空，走 `execute_tools`
-- 如果 `tool_plan` 为空，直接跳到 `review_results`
+## 当前多轮 tool-use 行为
 
-所以这个图既支持“需要工具的请求”，也支持“不需要工具的普通回答”。
+### 典型复杂样例
 
-### 提示词设计
+用户输入：
 
-提示词定义在 [app/graph/prompts.py](/E:/something%20I%20can%20turn%20to/HouGarden/Tool-Use/LangGraphTest/app/graph/prompts.py)，分成三类：
+```text
+给我找到张三中介名下所有房产的信息
+```
 
-- `intent_classification_prompt`
-- `tool_planning_prompt`
-- `final_answer_prompt`
+系统预期执行路径：
 
-这种拆法的优点是：
+1. `get_agent_id_by_name`
+2. `get_houses_by_agent_id`
+3. `get_house_detail`（逐套房源补详情）
+4. 汇总返回：
+   - 经纪人是谁
+   - 共找到几套房
+   - 每套房的 `house_id / name / price / currency / status`
 
-- 每个节点只关心当前任务
-- 便于单独优化分类、规划、总结的 prompt
-- 出问题时更容易定位是“理解错了”还是“工具选错了”
+### 为什么要做成循环
 
-## 当前请求流
+因为后一步常常依赖前一步结果。例如：
 
-一次 `/v1/chat` 调用的大致过程如下：
+- 先通过经纪人姓名拿到 `agent_id`
+- 再用 `agent_id` 查询房源列表
+- 再根据房源列表逐个查询详情
 
-1. 客户端向 Gateway 发送消息
-2. Gateway 创建初始图状态并执行 LangGraph
-3. 图先做输入归一化和意图分类
-4. 图读取 MCP 工具清单并做工具规划
-5. 如果有工具计划，就调用 MCP Server 执行
-6. 图整理工具结果并生成最终答复
-7. Gateway 返回答案、工具调用记录、审查备注和原始状态
+这类场景不适合“先静态吐完整 tool list”，更适合“拿到结果后再推理下一步”。
+
+## Tool Retrieval
+
+当前 retrieval 设计目标是“每轮都拉 `/tools`，但不把全量工具直接喂给 planner”。
+
+### 当前做法
+
+- 每轮请求 `MCP /tools`
+- 对工具元数据做标准化
+- 使用本地 embedding 检索
+- 叠加中文词法规则和业务域过滤
+- 输出候选工具 Top-K
+
+### 本地 embedding 模型
+
+默认 embedding 模型：
+
+- `BAAI/bge-small-zh-v1.5`
+
+该模型会在初始化阶段预下载到本地，服务启动时只读取本地缓存，不会在启动期临时联网拉取。
+
+## Mock 数据
+
+当前工具层使用统一 mock store，保证列表和详情一致。
+
+### 一致性保证
+
+- `agent_id -> houses` 稳定映射
+- `house_id -> detail` 稳定映射
+- `get_houses_by_agent_id` 和 `get_house_detail` 使用同一份 mock 数据
+
+### 当前适合测试的输入
+
+- `请帮我查询房源 house_demo_001 的详细信息`
+- `请帮我找到张三中介名下有哪些房源`
+- `给我找到张三中介名下所有房产的信息`
+- `帮我查一下房源 house_demo_001 对应的中介是谁`
 
 ## API 概览
 
@@ -276,21 +269,51 @@ START
 - `GET /health`
 - `POST /v1/chat/completions`
 
-## 快速启动
+## `/v1/chat` 返回结构
 
-### Windows
+当前返回中至少包含：
 
-初始化环境：
+- `answer`：给用户看的自然语言结果
+- `tool_calls`：本次请求实际执行过的全部工具调用
+- `tool_results`：全部工具执行结果
+- `review_notes`：风险提示、mock 数据提示等
+- `planner_iterations`：每轮 planner / validator / executor 的细节
+- `raw_state`：完整调试状态
 
-```bat
-bootstrap.bat
-```
+### `planner_iterations` 中的调试信息
 
-启动服务：
+每轮至少会记录：
 
-```bat
-start.bat
-```
+- `iteration_index`
+- `completed_tool_calls_snapshot`
+- `candidate_tools`
+- `planner_prompt_payload`
+- `planner_output`
+- `planner_trace`
+- `validated_plan`
+- `executed_tool`
+- `tool_result`
+
+这部分是后续做 SFT / 规划质量分析 / reward 打分的重要采样入口。
+
+## 结构化输出与 fallback
+
+当前 planner 输出使用结构化 JSON 约束，并在客户端侧做：
+
+- JSON 抽取
+- schema 校验
+- 单次 repair
+
+如果仍然失败，会明确记录：
+
+- `parsed_ok`
+- `repaired`
+- `fallback_used`
+- `fallback_reason`
+
+不会再出现“trace 里看不出 planner 到底怎么做决策”的情况。
+
+## 启动与初始化
 
 ### Linux
 
@@ -307,95 +330,122 @@ chmod +x bootstrap.sh start.sh
 ./start.sh
 ```
 
-## `bootstrap` 和 `start` 做了什么
+### Windows
 
-### `bootstrap`
+初始化环境：
 
-`bootstrap` 会在目标 conda 环境里执行 [init.py](/E:/something%20I%20can%20turn%20to/HouGarden/Tool-Use/LangGraphTest/init.py)，主要做这些事：
+```bat
+bootstrap.bat
+```
 
-- 创建 `logs/` 和 `models/`
-- 安装 `requirements.txt`
-- 安装合适的 `torch` 运行时
-- 按配置下载模型到本地
-- Linux + NVIDIA + conda 环境下优先安装 CUDA 版 PyTorch
-- 模型下载时优先走 ModelScope，失败后回退到 Hugging Face
+启动服务：
 
-### `start`
+```bat
+start.bat
+```
 
-`start` 会执行 [start.py](/E:/something%20I%20can%20turn%20to/HouGarden/Tool-Use/LangGraphTest/start.py)，主要做这些事：
+## `bootstrap` 和 `init.py` 现在做什么
 
-- 同时拉起 LLM / MCP / Gateway 三个服务
-- 为每个服务写入独立日志
-- 轮询健康检查直到服务可用
-- 主进程退出时统一关闭子进程
+### PyTorch 安装策略
 
-## 关键配置
+当前策略是：
+
+- `bootstrap.sh` 负责安装 `torch / torchvision / torchaudio`
+- `init.py` 不再安装 torch 家族
+- Linux + NVIDIA 场景下，在目标 conda 环境里用 pip wheel 安装：
+  - `torch==2.8.0`
+  - `torchvision==0.23.0`
+  - `torchaudio==2.8.0`
+  - `https://download.pytorch.org/whl/cu128`
+
+这样可以避免 conda / pip 混装冲突。
+
+### 模型下载策略
+
+`init.py` 负责：
+
+- 升级 pip
+- 安装非 torch 的 Python 依赖
+- 下载主模型
+- 下载本地 embedding 模型
+
+默认主模型：
+
+- `Qwen/Qwen3.5-4B`
+
+默认下载策略：
+
+- 优先国内 pip 镜像
+- 优先 `ModelScope`
+- Hugging Face 默认走镜像端点 `https://hf-mirror.com`
+
+### 服务启动时的 embedding 行为
+
+- embedding 模型在初始化阶段下载
+- 服务启动时只从本地缓存加载
+- 启动阶段不再临时联网下载 embedding 模型
+
+## 当前配置要点
 
 主配置文件：
 
-- [config/config.yaml](/E:/something%20I%20can%20turn%20to/HouGarden/Tool-Use/LangGraphTest/config/config.yaml)
+- [config.yaml](/E:/something%20I%20can%20turn%20to/HouGarden/Tool-Use/LangGraphTest/config/config.yaml)
 
-示例：
+关键配置项包括：
 
-```yaml
-project:
-  environment_name: lg_local_tool_service
-  python_version: "3.11"
+- `project.environment_name`
+- `llm.model_name`
+- `llm.service.model_source`
+- `llm.planner_max_tokens`
+- `llm.planner_temperature`
+- `llm.summarize_enabled`
+- `retrieval.enabled`
+- `retrieval.model_name`
+- `retrieval.model_cache_dir`
+- `retrieval.top_k`
+- `retrieval.similarity_threshold`
+- `mcp.manifest_path`
+- `gateway.service.port`
 
-llm:
-  model_name: Qwen/Qwen3-1.7B
-  base_url: http://127.0.0.1:8001/v1
-  service:
-    server_backend: transformers
-    model_source: Qwen/Qwen3-1.7B
-    model_cache_dir: models
+## 日志与排障
 
-mcp:
-  manifest_path: config/tools.yaml
+默认日志目录：
 
-gateway:
-  service:
-    host: 127.0.0.1
-    port: 8000
-```
-
-你通常会改这些项：
-
-- `project.environment_name`：conda 环境名
-- `llm.model_name`：对外展示的模型名
-- `llm.base_url`：LangGraph 访问 LLM 的地址
-- `llm.service.server_backend`：`transformers` 或 `vllm`
-- `llm.service.model_source`：模型来源
-- `llm.service.model_cache_dir`：模型缓存目录
-- `mcp.manifest_path`：工具清单路径
-- `gateway.service.port`：网关端口
-
-## 日志
-
-运行后日志默认写到 `logs/`：
-
+- `logs/gateway.log`
 - `logs/llm.log`
 - `logs/mcp.log`
-- `logs/gateway.log`
 
-## 适合如何扩展
+### 如何快速判断慢点在哪
 
-如果要把这个项目从 demo 骨架升级成真实业务版本，推荐按下面顺序扩展：
+- 如果 `llm.log` 中单次 `/v1/chat/completions` 很慢，瓶颈在模型推理
+- 如果 `mcp.log` 很快，而 `gateway.log` 总耗时长，重点看 planner 轮次和循环次数
 
-1. 把 `app/mcp_server/tools/` 中的 mock 实现替换成真实数据源
-2. 在 `config/tools.yaml` 中补充更准确的工具描述、字段和风险等级
-3. 增强 `review_results` 节点，加入写操作审批、权限和校验逻辑
-4. 为 `trace` 增加持久化存储，替换当前内存版 `TraceStore`
-5. 给 `plan_tool_calls` 增加更严格的参数约束和重试策略
+### 推荐先看的字段
 
-## 目前的边界
+- `execution_trace`
+- `planner_iterations`
+- `tool_calls`
+- `tool_results`
+- `review_notes`
 
-当前项目已经具备可运行的最小闭环，但也有明确边界：
+## 如何扩展
 
-- 工具返回值以 mock 数据为主
-- 没有真实持久化层
-- 写操作没有审批或权限模型
-- trace 仅保存在内存中
-- prompt 和 fallback 逻辑偏演示性质
+如果要继续把项目往真实业务方向推进，推荐按下面顺序扩展：
 
-如果你的目标是“先把 LangGraph + 工具调用链跑起来”，这个仓库已经足够；如果目标是直接上生产，还需要继续补业务接入、鉴权、审计和持久化。
+1. 用真实数据源替换 `app/mcp_server/tools/` 下的 mock 实现
+2. 丰富 `config/tools.yaml` 中的中文描述、权限标签、业务域和风险等级
+3. 把 `planner_iterations` 落到持久化存储，做 SFT 训练样本采集
+4. 在 `retrieve_candidate_tools` 接入更强的 embedding / reranker 检索
+5. 为写操作接入更完整的审批、审计和权限体系
+
+## 当前边界
+
+当前项目已经具备“本地可运行的多轮 tool-use 闭环”，但仍有明确边界：
+
+- 工具层目前仍以 mock 数据为主
+- trace 默认保存在内存
+- planner 的结构化输出虽然已增强，但仍可能走 fallback
+- 写操作确认目前是最小可用版
+- 还没有接入真实权限系统、持久化层和审计系统
+
+如果你的目标是验证“本地 LangGraph + tool-use + 多轮循环 + 可调试 trace”链路，这个版本已经足够；如果目标是直接上生产，还需要继续补业务接入和治理能力。
