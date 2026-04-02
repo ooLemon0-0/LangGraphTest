@@ -71,23 +71,23 @@ Gateway (FastAPI, LangGraph)
 
 ```mermaid
 graph TD
-    A["START"] --> B["normalize_input"]
-    B --> C["fetch_tools"]
-    C --> D["retrieve_candidate_tools"]
-    D --> E["plan_action"]
-    E --> F["validate_and_authorize"]
+    A["开始 / START"] --> B["输入归一化 / normalize_input"]
+    B --> C["拉取工具清单 / fetch_tools"]
+    C --> D["候选工具检索 / retrieve_candidate_tools"]
+    D --> E["规划下一步动作 / plan_action"]
+    E --> F["校验与授权 / validate_and_authorize"]
 
-    F -->|"need_confirmation"| G["approval_step"]
-    F -->|"has next tool"| H["execute_tools"]
-    F -->|"done / clarification / no safe action"| I["render_response"]
+    F -->|"需要确认 / need_confirmation"| G["确认步骤 / approval_step"]
+    F -->|"存在下一步工具 / has next tool"| H["执行工具 / execute_tools"]
+    F -->|"完成 / 需澄清 / 无安全动作 / done or clarification"| I["组织响应 / render_response"]
 
-    G -->|"approved"| H
-    G -->|"rejected"| I
+    G -->|"已批准 / approved"| H
+    G -->|"已拒绝 / rejected"| I
 
-    H -->|"continue loop"| C
-    H -->|"max iterations reached"| I
+    H -->|"继续循环 / continue loop"| C
+    H -->|"达到最大轮次 / max iterations reached"| I
 
-    I --> J["END"]
+    I --> J["结束 / END"]
 ```
 
 ### 各节点职责
