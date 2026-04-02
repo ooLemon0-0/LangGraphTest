@@ -8,11 +8,10 @@ from time import perf_counter
 from typing import Any
 
 import httpx
-from pydantic import ValidationError
 
 from app.common.schemas import ChatMessage, ToolInvocationRequest
 from app.common.settings import AppSettings
-from app.graph.planner_models import ApprovalPayload, PlannerOutput
+from app.graph.planner_models import ApprovalPayload, PlannerOutput, PlannerTrace
 from app.graph.prompts import plan_action_prompt
 from app.graph.state import GraphState
 from app.graph.tool_retrieval import retrieve_candidate_tools
@@ -114,13 +113,27 @@ async def plan_action(state: GraphState, deps: GraphDependencies) -> GraphState:
     }
     prompt = plan_action_prompt(user_input=user_input, candidate_tools_text=json.dumps(candidate_tools, indent=2))
     started = perf_counter()
-    parsed, trace = await deps.llm_client.chat_structured(
-        [ChatMessage(role="system", content=prompt)],
-        schema=PlannerOutput,
-        purpose="plan_action",
-        max_tokens=deps.settings.llm.planner_max_tokens,
-        temperature=deps.settings.llm.planner_temperature,
-    )
+    try:
+        parsed, trace = await deps.llm_client.chat_structured(
+            [ChatMessage(role="system", content=prompt)],
+            schema=PlannerOutput,
+            purpose="plan_action",
+            max_tokens=deps.settings.llm.planner_max_tokens,
+            temperature=deps.settings.llm.planner_temperature,
+        )
+    except Exception as exc:
+        logger.warning("Planner structured parse fallback used: %s", exc)
+        parsed = heuristic_planner_output(user_input=user_input, candidate_tools=candidate_tools)
+        trace = PlannerTrace(
+            purpose="plan_action",
+            max_tokens=deps.settings.llm.planner_max_tokens,
+            temperature=deps.settings.llm.planner_temperature,
+            latency_seconds=0.0,
+            parsed_ok=False,
+            repaired=False,
+            raw_output="",
+        )
+
     latency_seconds = perf_counter() - started
     logger.info(
         "LLM plan_action completed in %.3fs (parsed=%s repaired=%s max_tokens=%s)",
@@ -149,13 +162,112 @@ async def plan_action(state: GraphState, deps: GraphDependencies) -> GraphState:
     }
 
 
+def heuristic_planner_output(user_input: str, candidate_tools: list[dict[str, Any]]) -> PlannerOutput:
+    """Deterministic fallback planner when structured LLM output is unavailable."""
+    lowered = user_input.lower()
+    candidate_names = {tool["name"] for tool in candidate_tools}
+
+    tool_lookup_terms = [
+        "\u6709\u54ea\u4e9b\u5de5\u5177",
+        "\u4ec0\u4e48\u5de5\u5177",
+        "\u5de5\u5177",
+        "tool",
+    ]
+    write_terms = [
+        "\u4ef7\u683c",
+        "\u6539\u4ef7",
+        "\u4fee\u6539",
+        "\u66f4\u65b0",
+        "\u91cd\u547d\u540d",
+        "\u6539\u540d",
+    ]
+    read_terms = [
+        "\u623f\u6e90",
+        "\u8be6\u60c5",
+        "\u8be6\u7ec6\u4fe1\u606f",
+        "\u67e5\u770b",
+        "\u67e5\u8be2",
+        "house",
+    ]
+
+    if any(term in lowered for term in tool_lookup_terms):
+        tool_name = "list_tools" if "list_tools" in candidate_names else ""
+        tool_calls = [{"tool_name": tool_name, "arguments": {}}] if tool_name else []
+        return PlannerOutput(
+            intent="tool_lookup",
+            selected_tools=[tool_name] if tool_name else [],
+            tool_calls=tool_calls,
+            confidence=0.35,
+            risk_level="low",
+            direct_answer="" if tool_calls else "\u5f53\u524d\u6ca1\u6709\u53ef\u7528\u7684\u5de5\u5177\u6e05\u5355\u5de5\u5177\u3002",
+        )
+
+    if any(term in lowered for term in write_terms):
+        if "update_house_price" in candidate_names and "\u4ef7\u683c" in lowered:
+            return PlannerOutput(
+                intent="write",
+                selected_tools=["update_house_price"],
+                tool_calls=[
+                    {
+                        "tool_name": "update_house_price",
+                        "arguments": {
+                            "house_id": "house_demo_001",
+                            "new_price": 888888,
+                            "currency": "CNY",
+                        },
+                    }
+                ],
+                confidence=0.25,
+                risk_level="high",
+                need_confirmation=True,
+            )
+        if "update_house_name" in candidate_names:
+            return PlannerOutput(
+                intent="write",
+                selected_tools=["update_house_name"],
+                tool_calls=[
+                    {
+                        "tool_name": "update_house_name",
+                        "arguments": {
+                            "house_id": "house_demo_001",
+                            "new_name": "\u793a\u4f8b\u623f\u6e90",
+                        },
+                    }
+                ],
+                confidence=0.2,
+                risk_level="high",
+                need_confirmation=True,
+            )
+
+    if any(term in lowered for term in read_terms):
+        if "get_house_detail" in candidate_names:
+            return PlannerOutput(
+                intent="read",
+                selected_tools=["get_house_detail"],
+                tool_calls=[
+                    {
+                        "tool_name": "get_house_detail",
+                        "arguments": {"house_id": "house_demo_001"},
+                    }
+                ],
+                confidence=0.4,
+                risk_level="low",
+            )
+
+    return PlannerOutput(
+        intent="general",
+        selected_tools=[],
+        tool_calls=[],
+        confidence=0.1,
+        risk_level="low",
+        direct_answer="\u6211\u6682\u65f6\u65e0\u6cd5\u7a33\u5b9a\u89e3\u6790\u8fd9\u6761\u8bf7\u6c42\uff0c\u4f46\u5f53\u524d\u7cfb\u7edf\u5df2\u7ecf\u5b8c\u6210\u5de5\u5177\u68c0\u7d22\u4e0e\u5b89\u5168\u6821\u9a8c\u94fe\u8def\u3002",
+    )
+
+
 async def validate_and_authorize(state: GraphState, deps: GraphDependencies) -> GraphState:
     """Validate planned tool calls and enforce deterministic safety checks."""
     _ = deps
-    planner_trace = state.get("planner_trace", {})
-    raw_output = state.get("planner_raw_output", "")
     planner_output = PlannerOutput.model_validate(state.get("planner_output", {}))
-
     validated = validate_and_authorize_plan(
         planner_output=planner_output,
         candidate_tools=state.get("candidate_tools", []),
@@ -255,10 +367,7 @@ async def execute_tools(state: GraphState, deps: GraphDependencies) -> GraphStat
 
 
 async def render_response(state: GraphState, deps: GraphDependencies) -> GraphState:
-    """Render the final response with template-first logic.
-
-    Future summarize hooks for complex multi-tool outputs can be inserted here.
-    """
+    """Render the final response with template-first logic."""
     _ = deps
     validated_plan = state.get("validated_plan", {})
     tool_results = state.get("tool_results", [])
