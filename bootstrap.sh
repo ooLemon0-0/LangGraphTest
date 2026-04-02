@@ -170,6 +170,7 @@ export HF_HUB_ETAG_TIMEOUT="${HF_HUB_ETAG_TIMEOUT:-$DEFAULT_HF_TIMEOUT_SECONDS}"
 log "Default pip index-url: ${PIP_INDEX_URL}"
 log "Default Hugging Face endpoint: ${HF_ENDPOINT}"
 log "Default Hugging Face timeout: ${HF_HUB_DOWNLOAD_TIMEOUT}s"
+log "Model runtime note: after switching model family (for example to Qwen3.5-4B), prefer running bootstrap without --skip-install at least once so transformers runtime packages can be upgraded."
 
 if ! conda env list | awk '{print $1}' | grep -Fxq "$ENV_NAME"; then
   log "Creating conda env: ${ENV_NAME} (python=${PYTHON_VERSION})"

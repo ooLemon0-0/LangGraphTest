@@ -6,5 +6,6 @@ pyyaml>=6.0,<7.0
 langgraph>=0.2,<1.0
 langchain-openai>=0.2,<1.0
 huggingface_hub>=0.24,<1.0
-transformers>=4.45,<5.0
+transformers>=4.57,<5.0
+tokenizers>=0.21,<1.0
 accelerate>=0.34,<1.0

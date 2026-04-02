@@ -31,6 +31,12 @@ TORCH_REQUIREMENT_PREFIXES = ("torch", "torchvision", "torchaudio")
 DEFAULT_PIP_INDEX_URL = "https://pypi.tuna.tsinghua.edu.cn/simple"
 OFFICIAL_PIP_INDEX_URL = "https://pypi.org/simple"
 DEFAULT_HF_ENDPOINT = "https://hf-mirror.com"
+MODEL_RUNTIME_PACKAGES = [
+    "transformers>=4.57,<5.0",
+    "tokenizers>=0.21,<1.0",
+    "accelerate>=0.34,<1.0",
+    "huggingface_hub>=0.30,<1.0",
+]
 
 
 def parse_args() -> argparse.Namespace:
@@ -237,6 +243,7 @@ def install_packages(force: bool, backend: str) -> None:
     print_torch_runtime_snapshot(stage="before pip installs")
     run_pip_install("pip", description="Upgrading pip", upgrade=True)
     install_python_requirements(force=force)
+    install_model_runtime_packages(force=force)
 
     if backend == "vllm":
         run_pip_install("vllm", description="Installing optional vLLM backend", upgrade=force)
@@ -251,6 +258,21 @@ def install_python_requirements(force: bool) -> None:
         run_pip_install("-r", str(filtered_requirements), description="Installing project Python requirements", upgrade=force)
     finally:
         filtered_requirements.unlink(missing_ok=True)
+
+
+def install_model_runtime_packages(force: bool) -> None:
+    """Install runtime packages required by the selected local model family.
+
+    Keep this explicit instead of relying only on requirements.txt so model
+    upgrades can harden runtime compatibility in one place. This is especially
+    important when switching to newer Qwen families that need newer
+    transformers/tokenizers support than older environments may have.
+    """
+    run_pip_install(
+        *MODEL_RUNTIME_PACKAGES,
+        description="Installing model runtime compatibility packages",
+        upgrade=True if force else False,
+    )
 
 
 def build_filtered_requirements_file() -> Path:
