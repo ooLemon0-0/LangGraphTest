@@ -29,7 +29,9 @@ class ChatResponse(BaseModel):
     trace_id: str
     answer: str
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+    tool_results: list[dict[str, Any]] = Field(default_factory=list)
     review_notes: list[str] = Field(default_factory=list)
+    planner_iterations: list[dict[str, Any]] = Field(default_factory=list)
     raw_state: dict[str, Any] = Field(default_factory=dict)
 
 

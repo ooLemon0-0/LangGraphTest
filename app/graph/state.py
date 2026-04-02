@@ -30,6 +30,7 @@ class GraphState(TypedDict, total=False):
     completed_tool_calls: list[dict[str, Any]]
     iteration_count: int
     max_iterations: int
+    planner_iterations: list[dict[str, Any]]
 
     intent: Literal["tool_lookup", "read", "write", "general"]
     tool_plan: list[dict[str, Any]]

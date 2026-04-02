@@ -55,6 +55,7 @@ async def normalize_input(state: GraphState, deps: GraphDependencies) -> GraphSt
         "completed_tool_calls": [],
         "iteration_count": 0,
         "max_iterations": 4,
+        "planner_iterations": [],
     }
 
 
@@ -177,6 +178,17 @@ async def plan_action(state: GraphState, deps: GraphDependencies) -> GraphState:
     )
 
     execution_trace = list(state.get("execution_trace", []))
+    planner_iterations = list(state.get("planner_iterations", []))
+    planner_iterations.append(
+        {
+            "iteration_index": iteration_count,
+            "completed_tool_calls_snapshot": completed_tool_calls,
+            "candidate_tools": candidate_tools,
+            "planner_prompt_payload": planner_payload,
+            "planner_output": parsed.model_dump(),
+            "planner_trace": trace.model_dump() | {"fallback_used": not trace.parsed_ok, "fallback_reason": "" if trace.parsed_ok else "structured_parse_failed"},
+        }
+    )
     execution_trace.append(
         {
             "step": "plan_action",
@@ -195,6 +207,7 @@ async def plan_action(state: GraphState, deps: GraphDependencies) -> GraphState:
         "planner_trace": trace.model_dump(),
         "execution_trace": execution_trace,
         "iteration_count": iteration_count,
+        "planner_iterations": planner_iterations,
     }
 
 
@@ -390,6 +403,7 @@ async def validate_and_authorize(state: GraphState, deps: GraphDependencies) -> 
         user_role=str(state.get("metadata", {}).get("user_role", "user")),
     )
     execution_trace = list(state.get("execution_trace", []))
+    planner_iterations = list(state.get("planner_iterations", []))
     execution_trace.append(
         {
             "step": "validate_and_authorize",
@@ -399,6 +413,8 @@ async def validate_and_authorize(state: GraphState, deps: GraphDependencies) -> 
             "clarification_needed": validated.clarification_needed,
         }
     )
+    if planner_iterations:
+        planner_iterations[-1]["validated_plan"] = validated.model_dump()
     return {
         "validated_plan": validated.model_dump(),
         "tool_plan": validated.tool_calls[:1],
@@ -408,6 +424,7 @@ async def validate_and_authorize(state: GraphState, deps: GraphDependencies) -> 
         "clarification_question": validated.clarification_question,
         "response_notes": validated.notes,
         "execution_trace": execution_trace,
+        "planner_iterations": planner_iterations,
     }
 
 
@@ -448,9 +465,10 @@ async def execute_tools(state: GraphState, deps: GraphDependencies) -> GraphStat
     results = list(state.get("tool_results", []))
     completed_tool_calls = list(state.get("completed_tool_calls", []))
     execution_trace = list(state.get("execution_trace", []))
+    planner_iterations = list(state.get("planner_iterations", []))
     next_call = next(iter(state.get("tool_plan", [])), None)
     if next_call is None:
-        return {"tool_results": results, "execution_trace": execution_trace}
+        return {"tool_results": results, "execution_trace": execution_trace, "planner_iterations": planner_iterations}
 
     async with httpx.AsyncClient(timeout=deps.settings.mcp.request_timeout_seconds) as client:
         request = ToolInvocationRequest(
@@ -462,9 +480,10 @@ async def execute_tools(state: GraphState, deps: GraphDependencies) -> GraphStat
         response = await client.post(f"{deps.mcp_base_url}/invoke", json=request.model_dump())
         latency_seconds = perf_counter() - started
         if response.is_error:
-            results.append({"tool_name": next_call["tool_name"], "ok": False, "error": response.text})
+            tool_result = {"tool_name": next_call["tool_name"], "ok": False, "error": response.text}
         else:
-            results.append(response.json())
+            tool_result = response.json()
+        results.append(tool_result)
         completed_tool_calls.append(next_call)
         execution_trace.append(
             {
@@ -474,7 +493,16 @@ async def execute_tools(state: GraphState, deps: GraphDependencies) -> GraphStat
                 "ok": not response.is_error,
             }
         )
-    return {"tool_results": results, "completed_tool_calls": completed_tool_calls, "execution_trace": execution_trace, "need_confirmation": False}
+    if planner_iterations:
+        planner_iterations[-1]["executed_tool"] = next_call
+        planner_iterations[-1]["tool_result"] = tool_result
+    return {
+        "tool_results": results,
+        "completed_tool_calls": completed_tool_calls,
+        "execution_trace": execution_trace,
+        "need_confirmation": False,
+        "planner_iterations": planner_iterations,
+    }
 
 
 async def render_response(state: GraphState, deps: GraphDependencies) -> GraphState:
@@ -577,6 +605,49 @@ def render_single_tool_result(result: dict[str, Any], *, prefers_chinese: bool) 
 
 def render_multi_tool_results(results: list[dict[str, Any]], *, prefers_chinese: bool) -> str:
     """Template-first aggregation for multi-tool responses."""
+    agent_name = ""
+    agent_id = ""
+    houses_by_id: dict[str, dict[str, Any]] = {}
+
+    for item in results:
+        if item.get("tool_name") == "get_agent_id_by_name" and item.get("ok", False):
+            payload = item.get("result", {})
+            agent_name = str(payload.get("agent_name", ""))
+            agent_id = str(payload.get("agent_id", ""))
+        if item.get("tool_name") == "get_houses_by_agent_id" and item.get("ok", False):
+            for house in item.get("result", {}).get("houses", []):
+                house_id = house.get("house_id")
+                if house_id:
+                    houses_by_id[str(house_id)] = dict(house)
+        if item.get("tool_name") == "get_house_detail" and item.get("ok", False):
+            house = item.get("result", {}).get("house", {})
+            house_id = house.get("house_id")
+            if house_id:
+                houses_by_id[str(house_id)] = dict(house)
+
+    houses = list(houses_by_id.values())
+    if prefers_chinese and houses:
+        lines = [f"经纪人：{agent_name or agent_id or '未知'}", f"共找到 {len(houses)} 套房产："]
+        for house in houses:
+            lines.append(
+                f"- {house.get('house_id')}，{house.get('name')}，"
+                f"{house.get('price')} {house.get('currency', 'USD')}，状态：{house.get('status')}"
+            )
+        if any(item.get("mock", False) for item in results):
+            lines.append("当前结果来自 mock 数据。")
+        return "\n".join(lines)
+
+    if houses:
+        lines = [f"Agent: {agent_name or agent_id or 'unknown'}", f"Found {len(houses)} houses:"]
+        for house in houses:
+            lines.append(
+                f"- {house.get('house_id')}, {house.get('name')}, "
+                f"{house.get('price')} {house.get('currency', 'USD')}, status={house.get('status')}"
+            )
+        if any(item.get("mock", False) for item in results):
+            lines.append("Current results come from mock data.")
+        return "\n".join(lines)
+
     lines = []
     for item in results:
         status = ("成功" if item.get("ok", False) else "失败") if prefers_chinese else ("ok" if item.get("ok", False) else "failed")

@@ -5,7 +5,7 @@ project:
 
 llm:
   provider: openai_compatible
-  model_name: Qwen/Qwen3-1.7B
+  model_name: Qwen/Qwen3.5-4B
   base_url: http://127.0.0.1:8001/v1
   api_key: local-qwen
   temperature: 0.1
@@ -20,8 +20,8 @@ llm:
     host: 127.0.0.1
     port: 8001
     server_backend: transformers
-    model_source: Qwen/Qwen3-1.7B
-    model_source_cn: Qwen/Qwen3-1.7B
+    model_source: Qwen/Qwen3.5-4B
+    model_source_cn: Qwen/Qwen3.5-4B
     tensor_parallel_size: 1
     dtype: auto
     model_cache_dir: models

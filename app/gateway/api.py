@@ -66,8 +66,10 @@ def create_router(settings: AppSettings) -> APIRouter:
         return ChatResponse(
             trace_id=request.trace_id,
             answer=answer,
-            tool_calls=result.get("tool_plan", []),
+            tool_calls=result.get("completed_tool_calls", []),
+            tool_results=result.get("tool_results", []),
             review_notes=result.get("response_notes", []),
+            planner_iterations=result.get("planner_iterations", []),
             raw_state=serializable_state,
         )
 

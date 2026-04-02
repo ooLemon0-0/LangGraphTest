@@ -19,8 +19,8 @@ ROOT_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT_DIR / "config" / "config.yaml"
 DEFAULTS = {
     "llm.service.server_backend": "transformers",
-    "llm.service.model_source": "Qwen/Qwen3-1.7B",
-    "llm.service.model_source_cn": "Qwen/Qwen3-1.7B",
+    "llm.service.model_source": "Qwen/Qwen3.5-4B",
+    "llm.service.model_source_cn": "Qwen/Qwen3.5-4B",
     "llm.service.model_cache_dir": "models",
     "llm.service.download_timeout": "60",
     "retrieval.enabled": "true",
