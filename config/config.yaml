@@ -43,6 +43,15 @@ gateway:
   debug: true
   trace_store_limit: 200
 
+retrieval:
+  enabled: true
+  model_name: BAAI/bge-small-zh-v1.5
+  device: auto
+  top_k: 5
+  similarity_threshold: 0.2
+  max_length: 256
+  preload_on_startup: true
+
 logging:
   level: INFO
   json: false

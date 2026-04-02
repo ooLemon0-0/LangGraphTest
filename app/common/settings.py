@@ -82,6 +82,18 @@ class LoggingSettings(BaseModel):
     json: bool = False
 
 
+class RetrievalSettings(BaseModel):
+    """Tool retrieval config."""
+
+    enabled: bool = True
+    model_name: str = "BAAI/bge-small-zh-v1.5"
+    device: str = "auto"
+    top_k: int = 5
+    similarity_threshold: float = 0.2
+    max_length: int = 256
+    preload_on_startup: bool = True
+
+
 class AppSettings(BaseModel):
     """The single config object shared by all services."""
 
@@ -90,6 +102,7 @@ class AppSettings(BaseModel):
     mcp: MCPSettings
     gateway: GatewaySettings
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
+    retrieval: RetrievalSettings = Field(default_factory=RetrievalSettings)
 
 
 def load_yaml(path: Path) -> dict[str, Any]:

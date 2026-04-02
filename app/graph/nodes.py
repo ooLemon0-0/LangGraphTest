@@ -11,6 +11,7 @@ import httpx
 
 from app.common.schemas import ChatMessage, ToolInvocationRequest
 from app.common.settings import AppSettings
+from app.graph.embedding_retriever import LocalToolEmbeddingRetriever
 from app.graph.planner_models import ApprovalPayload, PlannerOutput, PlannerTrace
 from app.graph.prompts import plan_action_prompt
 from app.graph.state import GraphState
@@ -30,9 +31,10 @@ logger = logging.getLogger(__name__)
 class GraphDependencies:
     """Dependencies shared across graph nodes."""
 
-    def __init__(self, settings: AppSettings) -> None:
+    def __init__(self, settings: AppSettings, *, retriever: LocalToolEmbeddingRetriever | None = None) -> None:
         self.settings = settings
         self.llm_client = OpenAICompatibleClient(settings.llm)
+        self.retriever = retriever
 
     @property
     def mcp_base_url(self) -> str:
@@ -77,10 +79,23 @@ async def fetch_tools(state: GraphState, deps: GraphDependencies) -> GraphState:
 
 async def retrieve_candidate_tools_node(state: GraphState, deps: GraphDependencies) -> GraphState:
     """Reduce the full tool list down to a small candidate set."""
-    _ = deps
     user_input = state.get("normalized_user_input", "")
     all_tools = state.get("all_tools_snapshot", [])
-    candidates = retrieve_candidate_tools(user_input=user_input, all_tools=all_tools, top_k=5)
+    embedding_candidates: list[dict[str, Any]] = []
+    if deps.retriever is not None and deps.settings.retrieval.enabled:
+        embedding_candidates = deps.retriever.retrieve(user_input, all_tools)
+
+    candidates = retrieve_candidate_tools(
+        user_input=user_input,
+        all_tools=all_tools,
+        top_k=deps.settings.retrieval.top_k,
+    )
+    if embedding_candidates:
+        candidates = merge_candidate_lists(
+            primary=embedding_candidates,
+            secondary=candidates,
+            top_k=deps.settings.retrieval.top_k,
+        )
     candidate_names = [tool["name"] for tool in candidates]
     logger.info(
         "Tool retrieval selected %s/%s candidates: %s",
@@ -95,6 +110,7 @@ async def retrieve_candidate_tools_node(state: GraphState, deps: GraphDependenci
             "all_tools_count": len(all_tools),
             "candidate_tools_count": len(candidates),
             "candidate_names": candidate_names,
+            "embedding_enabled": bool(deps.retriever is not None and deps.settings.retrieval.enabled),
         }
     )
     return {
@@ -455,3 +471,24 @@ def derive_status(state: GraphState) -> str:
     if state.get("approval_status") == "rejected":
         return "cancelled"
     return "completed"
+
+
+def merge_candidate_lists(
+    *,
+    primary: list[dict[str, Any]],
+    secondary: list[dict[str, Any]],
+    top_k: int,
+) -> list[dict[str, Any]]:
+    """Merge embedding and lexical retrieval results while preserving order."""
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for source in [primary, secondary]:
+        for tool in source:
+            name = tool["name"]
+            if name in seen:
+                continue
+            merged.append(tool)
+            seen.add(name)
+            if len(merged) >= top_k:
+                return merged
+    return merged

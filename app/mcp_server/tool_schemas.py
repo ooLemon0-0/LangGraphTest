@@ -18,6 +18,9 @@ class ToolManifestEntry(BaseModel):
 
     name: str
     description: str
+    description_zh: str = ""
+    display_name_zh: str = ""
+    aliases_zh: list[str] = Field(default_factory=list)
     input_fields: list[str] = Field(default_factory=list)
     output_fields: list[str] = Field(default_factory=list)
     mode: Literal["read", "write"]

@@ -1,6 +1,9 @@
 tools:
   - name: list_tools
-    description: List every tool the system can use. Use this when you need to know what tools exist before choosing one.
+    description: 列出系统当前可用的全部工具。适合在用户想先了解有哪些工具可用时使用。
+    description_zh: 列出系统当前可用的全部工具。适合在用户想先了解有哪些工具可用时使用。
+    display_name_zh: 列出工具
+    aliases_zh: [查看工具, 工具列表, 有哪些工具]
     tags: [tools, manifest, discovery]
     business_domain: meta
     permission: read
@@ -12,9 +15,12 @@ tools:
       - risk_level
     mode: read
     risk_level: low
-    future_extension_notes: Can later filter by category, mode, or user role.
+    future_extension_notes: 后续可扩展为按分类、模式或用户角色筛选。
   - name: get_tool_detail
-    description: Get the full manifest entry for one tool. Use this when you need the exact input and output fields for a tool.
+    description: 获取某个工具的完整定义信息。适合在需要查看工具的精确输入输出字段时使用。
+    description_zh: 获取某个工具的完整定义信息。适合在需要查看工具的精确输入输出字段时使用。
+    display_name_zh: 查看工具详情
+    aliases_zh: [工具详情, 查看工具定义, 工具说明]
     tags: [tools, manifest, discovery]
     business_domain: meta
     permission: read
@@ -30,9 +36,12 @@ tools:
       - future_extension_notes
     mode: read
     risk_level: low
-    future_extension_notes: Can later include examples, constraints, and usage counters.
+    future_extension_notes: 后续可扩展为包含示例、约束和使用统计。
   - name: get_agent_id_by_name
-    description: Find an agent id from a human-readable agent name. Use this before house queries if the caller only knows the agent name.
+    description: 根据经纪人姓名查找经纪人 ID。适合在用户只知道经纪人名字、后续还要继续查房源时使用。
+    description_zh: 根据经纪人姓名查找经纪人 ID。适合在用户只知道经纪人名字、后续还要继续查房源时使用。
+    display_name_zh: 通过姓名查经纪人ID
+    aliases_zh: [查经纪人ID, 经纪人编号, 经纪人身份]
     tags: [agent, lookup, identity]
     business_domain: agent
     permission: read
@@ -44,9 +53,12 @@ tools:
       - source
     mode: read
     risk_level: low
-    future_extension_notes: Replace mock lookup with CRM or identity service query.
+    future_extension_notes: 后续可接入真实 CRM 或身份系统查询。
   - name: get_houses_by_agent_id
-    description: List houses for one agent id. Use this when you already know the agent id and need the houses linked to that agent.
+    description: 根据经纪人 ID 列出其关联房源。适合在已经知道经纪人 ID 时查询其名下房源。
+    description_zh: 根据经纪人 ID 列出其关联房源。适合在已经知道经纪人 ID 时查询其名下房源。
+    display_name_zh: 查询经纪人名下房源
+    aliases_zh: [经纪人房源, 名下房源, 查询房源列表]
     tags: [agent, house, lookup]
     business_domain: housing
     permission: read
@@ -58,9 +70,12 @@ tools:
       - source
     mode: read
     risk_level: low
-    future_extension_notes: Add paging, filters, and real repository access.
+    future_extension_notes: 后续可增加分页、过滤和真实数据源访问。
   - name: get_agent_by_house_id
-    description: Find the agent assigned to one house id. Use this when you know a house id and need the owning agent.
+    description: 根据房源 ID 查找负责该房源的经纪人。适合在已知房源 ID 时反查经纪人。
+    description_zh: 根据房源 ID 查找负责该房源的经纪人。适合在已知房源 ID 时反查经纪人。
+    display_name_zh: 通过房源查经纪人
+    aliases_zh: [房源对应经纪人, 查负责经纪人, 房源经纪人]
     tags: [agent, house, lookup]
     business_domain: housing
     permission: read
@@ -72,9 +87,12 @@ tools:
       - source
     mode: read
     risk_level: low
-    future_extension_notes: Later join house and agent data from a database.
+    future_extension_notes: 后续可从数据库联查房源与经纪人数据。
   - name: get_house_detail
-    description: Get the full detail for one house id. Use this when you need the current name, price, status, and linked agent id.
+    description: 获取某个房源的完整详情，包括名称、价格、状态和关联经纪人 ID。适合查询房源详情时使用。
+    description_zh: 获取某个房源的完整详情，包括名称、价格、状态和关联经纪人 ID。适合查询房源详情时使用。
+    display_name_zh: 查询房源详情
+    aliases_zh: [房源详情, 查看房源, 查询房子信息]
     tags: [house, detail, lookup]
     business_domain: housing
     permission: read
@@ -85,9 +103,12 @@ tools:
       - source
     mode: read
     risk_level: low
-    future_extension_notes: Add richer nested fields and permission-aware projections.
+    future_extension_notes: 后续可增加更丰富的嵌套字段和按权限裁剪的返回结构。
   - name: update_house_name
-    description: Change the name of one house. Use this only when the user explicitly asks to rename a house.
+    description: 修改某个房源的名称。只有当用户明确要求重命名房源时才应使用。
+    description_zh: 修改某个房源的名称。只有当用户明确要求重命名房源时才应使用。
+    display_name_zh: 修改房源名称
+    aliases_zh: [重命名房源, 改房源名, 修改名称]
     tags: [house, write, rename]
     business_domain: housing
     permission: write
@@ -101,9 +122,12 @@ tools:
       - source
     mode: write
     risk_level: medium
-    future_extension_notes: Add audit logging, validation rules, and transactional persistence.
+    future_extension_notes: 后续可增加审计日志、校验规则和事务化持久化。
   - name: update_house_price
-    description: Change the price of one house. Use this only when the user explicitly asks to update a house price.
+    description: 修改某个房源的价格。只有当用户明确要求更新房价时才应使用。
+    description_zh: 修改某个房源的价格。只有当用户明确要求更新房价时才应使用。
+    display_name_zh: 修改房源价格
+    aliases_zh: [改价, 更新房价, 修改价格]
     tags: [house, write, price]
     business_domain: housing
     permission: write
@@ -119,4 +143,4 @@ tools:
       - source
     mode: write
     risk_level: medium
-    future_extension_notes: Add approval policies, currency rules, and database writes.
+    future_extension_notes: 后续可增加审批策略、币种规则和真实数据库写入。

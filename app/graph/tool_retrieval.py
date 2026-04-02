@@ -14,6 +14,9 @@ def normalize_tool_metadata(tool: dict[str, Any]) -> dict[str, Any]:
     """Standardize raw MCP tool metadata into a retrieval-friendly shape."""
     name = str(tool.get("name", "")).strip()
     description = str(tool.get("description", "")).strip()
+    description_zh = str(tool.get("description_zh", "")).strip()
+    display_name_zh = str(tool.get("display_name_zh", "")).strip()
+    aliases_zh = [str(item).strip() for item in tool.get("aliases_zh", [])]
     input_fields = [str(item).strip() for item in tool.get("input_fields", [])]
     tags = [str(item).strip().lower() for item in tool.get("tags", [])]
     business_domain = str(tool.get("business_domain", "")).strip().lower()
@@ -24,13 +27,19 @@ def normalize_tool_metadata(tool: dict[str, Any]) -> dict[str, Any]:
     inferred_tags = sorted(
         {
             token
-            for token in re.split(r"[^a-zA-Z0-9_]+", f"{name} {description} {' '.join(input_fields)}")
+            for token in re.split(
+                r"[^a-zA-Z0-9_\u4e00-\u9fff]+",
+                f"{name} {description} {description_zh} {display_name_zh} {' '.join(aliases_zh)} {' '.join(input_fields)}",
+            )
             if token and len(token) > 2
         }
     )
     return {
         "name": name,
         "description": description,
+        "description_zh": description_zh,
+        "display_name_zh": display_name_zh,
+        "aliases_zh": aliases_zh,
         "input_fields": input_fields,
         "tags": sorted(set(tags + inferred_tags)),
         "business_domain": business_domain or infer_business_domain(name, description),
@@ -96,6 +105,9 @@ def retrieve_candidate_tools(
         haystacks = [
             tool["name"].lower(),
             tool["description"].lower(),
+            tool["description_zh"].lower(),
+            tool["display_name_zh"].lower(),
+            " ".join(tool["aliases_zh"]).lower(),
             " ".join(tool["input_fields"]).lower(),
             " ".join(tool["tags"]).lower(),
             tool["business_domain"],
@@ -110,6 +122,21 @@ def retrieve_candidate_tools(
         if score == 0 and tool["name"] in {"list_tools", "get_tool_detail"}:
             score = 1
 
+        if any(term in normalized_query for term in ["房源", "房子", "楼盘", "详情", "查询", "查看"]):
+            if tool["business_domain"] == "housing" and tool["mode"] == "read":
+                score += 6
+            if tool["name"] == "get_house_detail":
+                score += 10
+        if any(term in normalized_query for term in ["价格", "改价", "房价", "修改价格", "更新价格"]):
+            if tool["name"] == "update_house_price":
+                score += 12
+        if any(term in normalized_query for term in ["改名", "重命名", "名称"]):
+            if tool["name"] == "update_house_name":
+                score += 12
+        if any(term in normalized_query for term in ["经纪人", "中介", "agent"]):
+            if tool["business_domain"] == "agent":
+                score += 8
+
         scored.append((score, tool))
 
     scored.sort(key=lambda item: (item[0], item[1]["risk_level"] == "low"), reverse=True)
@@ -117,4 +144,3 @@ def retrieve_candidate_tools(
     if not selected:
         selected = [tool for _, tool in scored[: min(top_k, len(scored))]]
     return selected
-

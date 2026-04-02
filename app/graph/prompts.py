@@ -13,30 +13,30 @@ def plan_action_prompt(user_input: str, candidate_tools_text: str) -> str:
     """
     return dedent(
         f"""
-        You are the planning layer for a local tool-use system.
+        你是一个本地 tool-use 系统的规划层。
 
-        User request:
+        用户请求：
         {user_input}
 
-        Candidate tools:
+        候选工具：
         {candidate_tools_text}
 
-        Return exactly one JSON object with these keys:
-        - intent: one of ["tool_lookup", "read", "write", "general"]
-        - selected_tools: array of tool names
-        - tool_calls: array of objects with keys tool_name and arguments
-        - confidence: number between 0 and 1
-        - risk_level: one of ["low", "medium", "high"]
-        - need_confirmation: boolean
-        - clarification_needed: boolean
-        - clarification_question: string
-        - direct_answer: string
+        请严格返回一个 JSON 对象，并且只能包含这些键：
+        - intent: 取值只能是 ["tool_lookup", "read", "write", "general"]
+        - selected_tools: 工具名数组
+        - tool_calls: 数组，元素包含 tool_name 和 arguments
+        - confidence: 0 到 1 之间的小数
+        - risk_level: 取值只能是 ["low", "medium", "high"]
+        - need_confirmation: 布尔值
+        - clarification_needed: 布尔值
+        - clarification_question: 字符串
+        - direct_answer: 字符串
 
-        Rules:
-        - Prefer zero or one tool call unless multiple tools are clearly required.
-        - Only choose write tools if the user explicitly asked to change data.
-        - If the request is ambiguous, set clarification_needed=true and ask one concise question.
-        - If no tool is needed, keep tool_calls empty and fill direct_answer.
-        - Output valid JSON only. No markdown, no prose, no code fences.
+        规则：
+        - 除非确实需要多个工具，否则优先输出 0 个或 1 个工具调用。
+        - 只有当用户明确要求“修改 / 更新 / 写入”时，才能选择 write 工具。
+        - 如果用户意图不清楚，请设置 clarification_needed=true，并给出一句简短澄清问题。
+        - 如果不需要工具，请保持 tool_calls 为空，并在 direct_answer 中直接回答。
+        - 只能输出合法 JSON，不能输出 markdown，不能输出解释，不能输出代码块。
         """
     ).strip()
