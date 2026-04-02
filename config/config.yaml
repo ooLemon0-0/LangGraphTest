@@ -46,6 +46,7 @@ gateway:
 retrieval:
   enabled: true
   model_name: BAAI/bge-small-zh-v1.5
+  model_cache_dir: models/embeddings
   device: auto
   top_k: 5
   similarity_threshold: 0.2

@@ -10,6 +10,9 @@ TORCHVISION_VERSION="${TORCHVISION_VERSION:-0.23.0}"
 TORCHAUDIO_VERSION="${TORCHAUDIO_VERSION:-2.8.0}"
 PYTORCH_CUDA_VERSION="${PYTORCH_CUDA_VERSION:-12.8}"
 PYTORCH_WHEEL_INDEX_URL="${PYTORCH_WHEEL_INDEX_URL:-https://download.pytorch.org/whl/cu128}"
+DEFAULT_PIP_INDEX_URL="${DEFAULT_PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+DEFAULT_HF_ENDPOINT="${DEFAULT_HF_ENDPOINT:-https://hf-mirror.com}"
+DEFAULT_HF_TIMEOUT_SECONDS="${DEFAULT_HF_TIMEOUT_SECONDS:-60}"
 
 log() {
   echo "[bootstrap] $*"
@@ -114,6 +117,15 @@ fi
 log "Project root: ${ROOT_DIR}"
 log "Target conda env: ${ENV_NAME}"
 log "Requested Python version: ${PYTHON_VERSION}"
+
+export PIP_INDEX_URL="${PIP_INDEX_URL:-$DEFAULT_PIP_INDEX_URL}"
+export HF_ENDPOINT="${HF_ENDPOINT:-$DEFAULT_HF_ENDPOINT}"
+export HF_HUB_DOWNLOAD_TIMEOUT="${HF_HUB_DOWNLOAD_TIMEOUT:-$DEFAULT_HF_TIMEOUT_SECONDS}"
+export HF_HUB_ETAG_TIMEOUT="${HF_HUB_ETAG_TIMEOUT:-$DEFAULT_HF_TIMEOUT_SECONDS}"
+
+log "Default pip index-url: ${PIP_INDEX_URL}"
+log "Default Hugging Face endpoint: ${HF_ENDPOINT}"
+log "Default Hugging Face timeout: ${HF_HUB_DOWNLOAD_TIMEOUT}s"
 
 if ! conda env list | awk '{print $1}' | grep -Fxq "$ENV_NAME"; then
   log "Creating conda env: ${ENV_NAME} (python=${PYTHON_VERSION})"

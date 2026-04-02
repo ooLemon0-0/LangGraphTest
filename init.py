@@ -23,6 +23,9 @@ DEFAULTS = {
     "llm.service.model_source_cn": "Qwen/Qwen3-1.7B",
     "llm.service.model_cache_dir": "models",
     "llm.service.download_timeout": "60",
+    "retrieval.enabled": "true",
+    "retrieval.model_name": "BAAI/bge-small-zh-v1.5",
+    "retrieval.model_cache_dir": "models/embeddings",
 }
 TORCH_REQUIREMENT_PREFIXES = ("torch", "torchvision", "torchaudio")
 DEFAULT_PIP_INDEX_URL = "https://pypi.tuna.tsinghua.edu.cn/simple"
@@ -46,7 +49,7 @@ def log(message: str) -> None:
 
 def ensure_directories() -> None:
     """Create runtime directories used by the project."""
-    for directory in [ROOT_DIR / "logs", ROOT_DIR / "models"]:
+    for directory in [ROOT_DIR / "logs", ROOT_DIR / "models", ROOT_DIR / "models" / "embeddings"]:
         directory.mkdir(parents=True, exist_ok=True)
 
 
@@ -475,6 +478,37 @@ def download_model(
         raise
 
 
+def download_embedding_model(
+    model_name: str,
+    model_cache_dir: str,
+    timeout_seconds: int,
+    force: bool,
+) -> Path:
+    """Download the retrieval embedding model ahead of service startup."""
+    target_dir = (ROOT_DIR / model_cache_dir / model_name_from_source(model_name)).resolve()
+    if target_dir.exists() and any(target_dir.iterdir()) and not force:
+        log(f"Embedding model already present: {target_dir}")
+        return target_dir
+
+    staging_dir = build_staging_dir(target_dir)
+    try:
+        try:
+            download_from_huggingface(
+                model_source=model_name,
+                staging_dir=staging_dir,
+                timeout_seconds=timeout_seconds,
+            )
+            result = finalize_download(staging_dir=staging_dir, target_dir=target_dir)
+            log(f"Embedding model download complete via Hugging Face: {result}")
+            return result
+        except Exception:
+            safe_rmtree(staging_dir)
+            raise
+    except Exception:
+        safe_rmtree(staging_dir)
+        raise
+
+
 def print_runtime_context(backend: str) -> None:
     """Log runtime context needed to diagnose environment mismatches."""
     env_name = current_conda_env()
@@ -512,6 +546,13 @@ def main() -> None:
             timeout_seconds=int(config["llm.service.download_timeout"]),
             force=args.force,
         )
+        if config["retrieval.enabled"].strip().lower() == "true":
+            download_embedding_model(
+                model_name=config["retrieval.model_name"],
+                model_cache_dir=config["retrieval.model_cache_dir"],
+                timeout_seconds=int(config["llm.service.download_timeout"]),
+                force=args.force,
+            )
 
     log("")
     log("Initialization complete.")

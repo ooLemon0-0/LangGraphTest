@@ -8,13 +8,12 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from pathlib import Path
 from typing import Any
 
 import torch
 from transformers import AutoModel, AutoTokenizer
 
-from app.common.settings import RetrievalSettings
+from app.common.settings import RetrievalSettings, resolve_from_root
 from app.graph.tool_retrieval import normalize_tool_metadata
 
 
@@ -95,12 +94,13 @@ class LocalToolEmbeddingRetriever:
         if self._model is not None and self._tokenizer is not None:
             return
         logger.info(
-            "Loading local embedding retriever model %s on %s",
+            "Loading local embedding retriever model %s from local cache on %s",
             self.settings.model_name,
             self._device,
         )
-        self._tokenizer = AutoTokenizer.from_pretrained(self.settings.model_name)
-        self._model = AutoModel.from_pretrained(self.settings.model_name)
+        local_path = resolve_from_root(self.settings.model_cache_dir) / self.settings.model_name.split("/")[-1]
+        self._tokenizer = AutoTokenizer.from_pretrained(str(local_path), local_files_only=True)
+        self._model = AutoModel.from_pretrained(str(local_path), local_files_only=True)
         self._model.to(self._device)
         self._model.eval()
 

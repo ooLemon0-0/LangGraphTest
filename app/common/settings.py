@@ -87,6 +87,7 @@ class RetrievalSettings(BaseModel):
 
     enabled: bool = True
     model_name: str = "BAAI/bge-small-zh-v1.5"
+    model_cache_dir: str = "models/embeddings"
     device: str = "auto"
     top_k: int = 5
     similarity_threshold: float = 0.2
