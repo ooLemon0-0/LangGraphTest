@@ -37,10 +37,20 @@ MODEL_RUNTIME_PACKAGES = [
     "tokenizers>=0.21,<1.0",
     "accelerate>=0.34,<1.0",
     "huggingface_hub>=0.30,<1.0",
+    "safetensors>=0.4,<1.0",
+    "sentencepiece>=0.2,<1.0",
 ]
 TRANSFORMERS_MAIN_PACKAGE = "git+https://github.com/huggingface/transformers.git"
 TRANSFORMERS_MAIN_MODEL_TYPES = {"qwen3_5"}
 TRANSFORMERS_MAIN_SOURCE_HINTS = ("qwen3.5", "qwen3_5", "qwen3-5")
+MODEL_RUNTIME_PACKAGE_NAMES = [
+    "transformers",
+    "tokenizers",
+    "accelerate",
+    "huggingface_hub",
+    "safetensors",
+    "sentencepiece",
+]
 
 
 def parse_args() -> argparse.Namespace:
@@ -164,23 +174,43 @@ def build_pip_env(index_url: str, extra_index_urls: list[str] | None = None) -> 
     return env
 
 
-def build_pip_command(*packages: str, upgrade: bool = False) -> list[str]:
+def build_pip_command(
+    *packages: str,
+    upgrade: bool = False,
+    force_reinstall: bool = False,
+    no_cache_dir: bool = False,
+) -> list[str]:
     """Construct a reusable pip install command."""
     command = [sys.executable, "-m", "pip", "install"]
     if upgrade:
         command.append("--upgrade")
+    if force_reinstall:
+        command.append("--force-reinstall")
+    if no_cache_dir:
+        command.append("--no-cache-dir")
     command.extend(packages)
     return command
 
 
-def run_pip_install(*packages: str, description: str, upgrade: bool = False) -> None:
+def run_pip_install(
+    *packages: str,
+    description: str,
+    upgrade: bool = False,
+    force_reinstall: bool = False,
+    no_cache_dir: bool = False,
+) -> None:
     """Install Python packages with domestic mirror first, then fall back to the official index."""
     attempts = [
         ("preferred", pip_index_url(), pip_extra_index_urls()),
         ("official", OFFICIAL_PIP_INDEX_URL, []),
     ]
     seen: set[tuple[str, tuple[str, ...]]] = set()
-    command = build_pip_command(*packages, upgrade=upgrade)
+    command = build_pip_command(
+        *packages,
+        upgrade=upgrade,
+        force_reinstall=force_reinstall,
+        no_cache_dir=no_cache_dir,
+    )
     last_error: subprocess.CalledProcessError | None = None
 
     for label, index_url, extra_urls in attempts:
@@ -208,6 +238,17 @@ def run_pip_install(*packages: str, description: str, upgrade: bool = False) -> 
 
     if last_error is not None:
         raise last_error
+
+
+def uninstall_python_packages(*packages: str, description: str) -> None:
+    """Uninstall Python packages from the active interpreter if they are present."""
+    if not packages:
+        return
+
+    command = [sys.executable, "-m", "pip", "uninstall", "-y", *packages]
+    log(description)
+    print("       " + " ".join(command))
+    subprocess.run(command, cwd=ROOT_DIR, check=False, env=os.environ.copy())
 
 
 def detect_torch_installation_source() -> str:
@@ -273,16 +314,30 @@ def install_model_runtime_packages(force: bool, config: dict[str, str]) -> None:
     important when switching to newer Qwen families that need newer
     transformers/tokenizers support than older environments may have.
     """
+    requires_transformers_main = model_requires_transformers_main(config)
+    force_runtime_sync = requires_transformers_main or force or should_force_runtime_sync()
+
+    if force_runtime_sync:
+        log("Forcing model runtime package sync for the selected model family")
+        uninstall_python_packages(
+            *MODEL_RUNTIME_PACKAGE_NAMES,
+            description="Removing model runtime packages before forced reinstall",
+        )
+
     run_pip_install(
         *MODEL_RUNTIME_PACKAGES,
         description="Installing model runtime compatibility packages",
         upgrade=True,
+        force_reinstall=force_runtime_sync,
+        no_cache_dir=force_runtime_sync,
     )
-    if model_requires_transformers_main(config):
+    if requires_transformers_main:
         run_pip_install(
             TRANSFORMERS_MAIN_PACKAGE,
             description="Installing Transformers main branch for Qwen3.5 compatibility",
             upgrade=True,
+            force_reinstall=True,
+            no_cache_dir=True,
         )
 
 
@@ -339,6 +394,12 @@ def model_requires_transformers_main(config: dict[str, str]) -> bool:
 
     model_type = read_local_model_type(config)
     return model_type in TRANSFORMERS_MAIN_MODEL_TYPES
+
+
+def should_force_runtime_sync() -> bool:
+    """Return True when bootstrap requested a forced runtime reinstall."""
+    raw = os.environ.get("INIT_FORCE_RUNTIME_SYNC", "")
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def build_filtered_requirements_file() -> Path:

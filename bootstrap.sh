@@ -33,6 +33,23 @@ read_project_value() {
   ' "$CONFIG_PATH"
 }
 
+read_llm_service_value() {
+  local key="$1"
+  awk -v target="$key" '
+    $0 ~ /^llm:[[:space:]]*$/ { in_llm=1; next }
+    in_llm && $0 ~ /^[^[:space:]]/ { in_llm=0 }
+    in_llm && $0 ~ /^[[:space:]]+service:[[:space:]]*$/ { in_service=1; next }
+    in_service && $0 ~ /^[[:space:]]{2}[^[:space:]]/ && $1 != "service:" { in_service=0 }
+    in_service {
+      gsub(/"/, "", $0)
+      if ($1 == target ":") {
+        print $2
+        exit
+      }
+    }
+  ' "$CONFIG_PATH"
+}
+
 ensure_conda_available() {
   if ! command -v conda >/dev/null 2>&1; then
     log "conda was not found in PATH."
@@ -152,6 +169,7 @@ ensure_conda_available
 
 ENV_NAME="$(read_project_value environment_name)"
 PYTHON_VERSION="$(read_project_value python_version)"
+MODEL_SOURCE="$(read_llm_service_value model_source)"
 
 if [[ -z "${ENV_NAME}" || -z "${PYTHON_VERSION}" ]]; then
   log "Failed to read conda environment config from config/config.yaml."
@@ -170,8 +188,18 @@ export HF_HUB_ETAG_TIMEOUT="${HF_HUB_ETAG_TIMEOUT:-$DEFAULT_HF_TIMEOUT_SECONDS}"
 log "Default pip index-url: ${PIP_INDEX_URL}"
 log "Default Hugging Face endpoint: ${HF_ENDPOINT}"
 log "Default Hugging Face timeout: ${HF_HUB_DOWNLOAD_TIMEOUT}s"
+log "Configured model source: ${MODEL_SOURCE:-<unknown>}"
 log "Model runtime note: after switching model family, run bootstrap.sh once without --skip-install so transformers runtime packages can be upgraded inside the Linux conda env."
 log "Qwen compatibility note: init.py now detects Qwen3.5-style model_type values such as qwen3_5 from the selected model config and may install Transformers main branch automatically."
+
+case "${MODEL_SOURCE,,}" in
+  *qwen3.5*|*qwen3_5*|*qwen3-5*)
+    export INIT_FORCE_RUNTIME_SYNC=1
+    log "Detected Qwen3.5 model family. Forced runtime package sync is enabled for this bootstrap run."
+    ;;
+  *)
+    ;;
+esac
 
 if ! conda env list | awk '{print $1}' | grep -Fxq "$ENV_NAME"; then
   log "Creating conda env: ${ENV_NAME} (python=${PYTHON_VERSION})"
