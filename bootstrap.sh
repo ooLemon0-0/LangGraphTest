@@ -13,6 +13,7 @@ PYTORCH_WHEEL_INDEX_URL="${PYTORCH_WHEEL_INDEX_URL:-https://download.pytorch.org
 DEFAULT_PIP_INDEX_URL="${DEFAULT_PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
 DEFAULT_HF_ENDPOINT="${DEFAULT_HF_ENDPOINT:-https://hf-mirror.com}"
 DEFAULT_HF_TIMEOUT_SECONDS="${DEFAULT_HF_TIMEOUT_SECONDS:-60}"
+INSTALL_TORCHVISION_AND_TORCHAUDIO=1
 
 log() {
   echo "[bootstrap] $*"
@@ -134,14 +135,27 @@ PY
 
 install_pip_gpu_torch() {
   log "Installing CUDA-enabled PyTorch wheel into conda env ${ENV_NAME}"
-  log "Torch target versions: torch=${PYTORCH_VERSION}, torchvision=${TORCHVISION_VERSION}, torchaudio=${TORCHAUDIO_VERSION}, cuda=${PYTORCH_CUDA_VERSION}"
+  if [[ "${INSTALL_TORCHVISION_AND_TORCHAUDIO}" == "1" ]]; then
+    log "Torch target versions: torch=${PYTORCH_VERSION}, torchvision=${TORCHVISION_VERSION}, torchaudio=${TORCHAUDIO_VERSION}, cuda=${PYTORCH_CUDA_VERSION}"
+  else
+    log "Torch target versions: torch=${PYTORCH_VERSION}, cuda=${PYTORCH_CUDA_VERSION} (skipping torchvision/torchaudio for text-only model runtime)"
+  fi
   log "PyTorch wheel index-url: ${PYTORCH_WHEEL_INDEX_URL}"
-  log "Command: conda run --no-capture-output -n ${ENV_NAME} python -m pip install --upgrade torch==${PYTORCH_VERSION} torchvision==${TORCHVISION_VERSION} torchaudio==${TORCHAUDIO_VERSION} --index-url ${PYTORCH_WHEEL_INDEX_URL}"
-  conda run --no-capture-output -n "$ENV_NAME" python -m pip install --upgrade \
-    "torch==${PYTORCH_VERSION}" \
-    "torchvision==${TORCHVISION_VERSION}" \
-    "torchaudio==${TORCHAUDIO_VERSION}" \
-    --index-url "$PYTORCH_WHEEL_INDEX_URL"
+  if [[ "${INSTALL_TORCHVISION_AND_TORCHAUDIO}" == "1" ]]; then
+    log "Command: conda run --no-capture-output -n ${ENV_NAME} python -m pip install --upgrade torch==${PYTORCH_VERSION} torchvision==${TORCHVISION_VERSION} torchaudio==${TORCHAUDIO_VERSION} --index-url ${PYTORCH_WHEEL_INDEX_URL}"
+    conda run --no-capture-output -n "$ENV_NAME" python -m pip install --upgrade \
+      "torch==${PYTORCH_VERSION}" \
+      "torchvision==${TORCHVISION_VERSION}" \
+      "torchaudio==${TORCHAUDIO_VERSION}" \
+      --index-url "$PYTORCH_WHEEL_INDEX_URL"
+  else
+    log "Command: conda run --no-capture-output -n ${ENV_NAME} python -m pip install --upgrade torch==${PYTORCH_VERSION} --index-url ${PYTORCH_WHEEL_INDEX_URL}"
+    conda run --no-capture-output -n "$ENV_NAME" python -m pip install --upgrade \
+      "torch==${PYTORCH_VERSION}" \
+      --index-url "$PYTORCH_WHEEL_INDEX_URL"
+    log "Removing torchvision/torchaudio to avoid text-model startup failures from broken torchvision operators"
+    conda run --no-capture-output -n "$ENV_NAME" python -m pip uninstall -y torchvision torchaudio >/dev/null 2>&1 || true
+  fi
 }
 
 ensure_gpu_runtime() {
@@ -195,7 +209,9 @@ log "Qwen compatibility note: init.py now detects Qwen3.5-style model_type value
 case "${MODEL_SOURCE,,}" in
   *qwen3.5*|*qwen3_5*|*qwen3-5*)
     export INIT_FORCE_RUNTIME_SYNC=1
+    INSTALL_TORCHVISION_AND_TORCHAUDIO=0
     log "Detected Qwen3.5 model family. Forced runtime package sync is enabled for this bootstrap run."
+    log "Detected text-only Qwen3.5 runtime. bootstrap.sh will skip torchvision/torchaudio to avoid torchvision import crashes."
     ;;
   *)
     ;;

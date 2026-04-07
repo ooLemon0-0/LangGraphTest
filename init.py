@@ -59,6 +59,10 @@ OPTIONAL_ACCELERATION_PACKAGE_NAMES = [
     "causal-conv1d",
     "causal_conv1d",
 ]
+VISION_PACKAGE_NAMES = [
+    "torchvision",
+    "torchaudio",
+]
 
 
 def parse_args() -> argparse.Namespace:
@@ -334,6 +338,10 @@ def install_model_runtime_packages(force: bool, config: dict[str, str]) -> None:
         uninstall_python_packages(
             *OPTIONAL_ACCELERATION_PACKAGE_NAMES,
             description="Removing optional acceleration packages that can break Qwen3.5 imports",
+        )
+        uninstall_python_packages(
+            *VISION_PACKAGE_NAMES,
+            description="Removing torchvision/torchaudio for text-only Qwen3.5 runtime compatibility",
         )
 
     run_pip_install(
