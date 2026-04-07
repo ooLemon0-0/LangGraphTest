@@ -51,6 +51,14 @@ MODEL_RUNTIME_PACKAGE_NAMES = [
     "safetensors",
     "sentencepiece",
 ]
+OPTIONAL_ACCELERATION_PACKAGE_NAMES = [
+    "flash-attn",
+    "flash_attn",
+    "flash-linear-attention",
+    "fla",
+    "causal-conv1d",
+    "causal_conv1d",
+]
 
 
 def parse_args() -> argparse.Namespace:
@@ -322,6 +330,10 @@ def install_model_runtime_packages(force: bool, config: dict[str, str]) -> None:
         uninstall_python_packages(
             *MODEL_RUNTIME_PACKAGE_NAMES,
             description="Removing model runtime packages before forced reinstall",
+        )
+        uninstall_python_packages(
+            *OPTIONAL_ACCELERATION_PACKAGE_NAMES,
+            description="Removing optional acceleration packages that can break Qwen3.5 imports",
         )
 
     run_pip_install(
