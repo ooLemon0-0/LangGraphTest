@@ -170,8 +170,8 @@ export HF_HUB_ETAG_TIMEOUT="${HF_HUB_ETAG_TIMEOUT:-$DEFAULT_HF_TIMEOUT_SECONDS}"
 log "Default pip index-url: ${PIP_INDEX_URL}"
 log "Default Hugging Face endpoint: ${HF_ENDPOINT}"
 log "Default Hugging Face timeout: ${HF_HUB_DOWNLOAD_TIMEOUT}s"
-log "Model runtime note: after switching model family (for example to Qwen3.5-4B), prefer running bootstrap without --skip-install at least once so transformers runtime packages can be upgraded."
-log "Qwen3.5 note: init.py may install Transformers main branch when the selected model family requires architecture support beyond the latest stable wheel."
+log "Model runtime note: after switching model family, run bootstrap.sh once without --skip-install so transformers runtime packages can be upgraded inside the Linux conda env."
+log "Qwen compatibility note: init.py now detects Qwen3.5-style model_type values such as qwen3_5 from the selected model config and may install Transformers main branch automatically."
 
 if ! conda env list | awk '{print $1}' | grep -Fxq "$ENV_NAME"; then
   log "Creating conda env: ${ENV_NAME} (python=${PYTHON_VERSION})"

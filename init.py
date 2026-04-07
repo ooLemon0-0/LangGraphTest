@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 import os
 import re
 import shutil
@@ -38,6 +39,8 @@ MODEL_RUNTIME_PACKAGES = [
     "huggingface_hub>=0.30,<1.0",
 ]
 TRANSFORMERS_MAIN_PACKAGE = "git+https://github.com/huggingface/transformers.git"
+TRANSFORMERS_MAIN_MODEL_TYPES = {"qwen3_5"}
+TRANSFORMERS_MAIN_SOURCE_HINTS = ("qwen3.5", "qwen3_5", "qwen3-5")
 
 
 def parse_args() -> argparse.Namespace:
@@ -295,6 +298,31 @@ def print_runtime_package_versions() -> None:
             log(f"{package} version check failed: {exc}")
 
 
+def configured_model_local_dir(config: dict[str, str]) -> Path:
+    """Return the expected local directory for the selected model."""
+    model_source = config.get("llm.service.model_source_cn") or config.get("llm.service.model_source") or ""
+    model_cache_dir = config.get("llm.service.model_cache_dir") or "models"
+    return (ROOT_DIR / model_cache_dir / model_name_from_source(model_source)).resolve()
+
+
+def read_local_model_type(config: dict[str, str]) -> str:
+    """Read model_type from a downloaded local config.json when present."""
+    config_path = configured_model_local_dir(config) / "config.json"
+    if not config_path.exists():
+        return ""
+
+    try:
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        log(f"Skipping local model_type detection because config.json could not be read: {exc}")
+        return ""
+
+    model_type = str(payload.get("model_type", "")).strip().lower()
+    if model_type:
+        log(f"Detected local model_type from {config_path}: {model_type}")
+    return model_type
+
+
 def model_requires_transformers_main(config: dict[str, str]) -> bool:
     """Return True when the selected model family needs Transformers main.
 
@@ -302,8 +330,15 @@ def model_requires_transformers_main(config: dict[str, str]) -> bool:
     baseline, so a stable PyPI release may still miss the `qwen3_5`
     architecture even when it is numerically newer than the documented dev tag.
     """
-    source = (config.get("llm.service.model_source") or "").strip().lower()
-    return "qwen3.5" in source
+    sources = [
+        (config.get("llm.service.model_source") or "").strip().lower(),
+        (config.get("llm.service.model_source_cn") or "").strip().lower(),
+    ]
+    if any(hint in source for source in sources for hint in TRANSFORMERS_MAIN_SOURCE_HINTS):
+        return True
+
+    model_type = read_local_model_type(config)
+    return model_type in TRANSFORMERS_MAIN_MODEL_TYPES
 
 
 def build_filtered_requirements_file() -> Path:
