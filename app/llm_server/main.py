@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+import traceback
 from typing import Any
 from pathlib import Path
 
@@ -67,6 +68,8 @@ class ModelRuntime:
             torch_dtype,
         )
 
+        self._log_runtime_diagnostics(model_path)
+
         self.tokenizer = AutoTokenizer.from_pretrained(
             str(model_path),
             cache_dir=str(model_root),
@@ -80,6 +83,29 @@ class ModelRuntime:
         )
         self.model.to(self.device)
         self.model.eval()
+
+    @staticmethod
+    def _log_runtime_diagnostics(model_path: Path | str) -> None:
+        """Log versions and package presence before model import for easier server-side debugging."""
+        logger.info("Model path/source resolved to: %s", model_path)
+        packages = [
+            "transformers",
+            "tokenizers",
+            "accelerate",
+            "huggingface_hub",
+            "safetensors",
+            "sentencepiece",
+            "flash_attn",
+            "fla",
+            "causal_conv1d",
+        ]
+        for package in packages:
+            try:
+                module = __import__(package)
+                version = getattr(module, "__version__", "<unknown>")
+                logger.info("Package check: %s=%s", package, version)
+            except Exception as exc:
+                logger.info("Package check: %s unavailable (%s)", package, exc)
 
     @staticmethod
     def _resolve_model_path(model_root: Path, configured_source: str) -> Path | str:
@@ -180,7 +206,12 @@ started_at = time.time()
 @app.on_event("startup")
 async def startup_event() -> None:
     """Warm up the model during service startup."""
-    runtime.load()
+    try:
+        runtime.load()
+    except Exception:
+        logger.exception("LLM startup failed during runtime.load()")
+        logger.error("Full startup traceback:\n%s", traceback.format_exc())
+        raise
 
 
 @app.get("/health", response_model=HealthResponse)
